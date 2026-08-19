@@ -8,7 +8,8 @@
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, Clear as ClearScreen, ClearType, EnterAlternateScreen,
+    LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
@@ -33,6 +34,30 @@ impl TerminalGuard {
         execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)
             .context("could not switch to the alternate screen")?;
         Ok(Self { armed: true })
+    }
+
+    /// Hand the terminal to a line-oriented prompt **without leaving the alternate screen**.
+    ///
+    /// Leaving it would drop the form onto the user's real terminal, where the output of
+    /// every previous form is still sitting — so a second Ctrl-A would render under the
+    /// leftovers of the last Ctrl-E and read as a corrupted prompt. Staying inside the
+    /// alternate screen and clearing it gives each form a blank slate and leaves whatever
+    /// the user had on screen before the picker completely untouched.
+    fn suspend(&mut self) -> Result<()> {
+        let _ = disable_raw_mode();
+        execute!(
+            io::stdout(),
+            ClearScreen(ClearType::All),
+            cursor::MoveTo(0, 0),
+            cursor::Show
+        )
+        .context("could not hand the terminal to the form")
+    }
+
+    /// Take the terminal back after a form.
+    fn resume(&mut self) -> Result<()> {
+        enable_raw_mode().context("could not return the terminal to raw mode")?;
+        execute!(io::stdout(), cursor::Hide).context("could not hide the cursor")
     }
 
     /// Put the terminal back now, and stop the Drop impl from doing it again.
@@ -327,9 +352,9 @@ fn prompt_outside_tui(
     guard: &mut TerminalGuard,
     defaults: cli::AddArgs,
 ) -> Result<Option<Connection>> {
-    guard.restore();
+    guard.suspend()?;
     let result = cli::prompt_for_connection(defaults);
-    *guard = TerminalGuard::enter()?;
+    guard.resume()?;
     terminal.clear()?;
     Ok(result.ok())
 }
@@ -340,9 +365,9 @@ fn edit_outside_tui(
     guard: &mut TerminalGuard,
     existing: &Connection,
 ) -> Result<Option<Connection>> {
-    guard.restore();
-    let result = cli::edit_form(existing);
-    *guard = TerminalGuard::enter()?;
+    guard.suspend()?;
+    let result = cli::edit_form(existing, cli::Surface::Owned);
+    guard.resume()?;
     terminal.clear()?;
     result
 }

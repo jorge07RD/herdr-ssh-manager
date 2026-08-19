@@ -201,6 +201,28 @@ fn blank_to_none(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// Who owns the screen an interactive form is drawn on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Surface {
+    /// A screen this process set up and will tear down — safe to clear.
+    Owned,
+    /// The user's own terminal, whose scrollback is not ours to erase.
+    Shared,
+}
+
+impl Surface {
+    fn clear_if_owned(self) {
+        if self == Surface::Owned {
+            use crossterm::terminal::{Clear, ClearType};
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                Clear(ClearType::All),
+                crossterm::cursor::MoveTo(0, 0)
+            );
+        }
+    }
+}
+
 /// One editable field of a saved connection.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Field {
@@ -270,13 +292,21 @@ impl Field {
 /// to touch. Here the whole entry stays on screen, and only what you select changes.
 ///
 /// Returns `None` when the edit was discarded or cancelled.
-pub fn edit_form(existing: &Connection) -> Result<Option<Connection>> {
+///
+/// `surface` says who owns the screen. Each answered prompt leaves a line behind, so editing
+/// a few fields would push the record itself out of view — in the picker's popup, which is
+/// twenty rows tall, that happens almost immediately. When the screen is ours to manage we
+/// wipe it between rounds so the record stays anchored at the top; when we are sharing a
+/// user's shell we leave their scrollback alone.
+pub fn edit_form(existing: &Connection, surface: Surface) -> Result<Option<Connection>> {
     let mut draft = existing.clone();
     // Coming back from a field should leave the cursor where it was, not at the top:
     // fixing three fields in a row should not mean scrolling down from Name each time.
     let mut cursor = 0usize;
 
     loop {
+        surface.clear_if_owned();
+
         let mut options: Vec<String> = Field::ALL
             .iter()
             .map(|f| format!("{:<16} {}", f.label(), f.value_of(&draft)))
@@ -571,7 +601,7 @@ pub fn edit(args: EditArgs) -> Result<()> {
         ssh::build_args(&c)?;
         c
     } else {
-        match edit_form(&existing)? {
+        match edit_form(&existing, Surface::Shared)? {
             Some(updated) => updated,
             None => {
                 println!("No changes to `{}`.", existing.id);
