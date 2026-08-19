@@ -334,6 +334,19 @@ fn prompt_outside_tui(
     Ok(result.ok())
 }
 
+/// Same suspend/resume dance, for the field-picker editor.
+fn edit_outside_tui(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    guard: &mut TerminalGuard,
+    existing: &Connection,
+) -> Result<Option<Connection>> {
+    guard.restore();
+    let result = cli::edit_form(existing);
+    *guard = TerminalGuard::enter()?;
+    terminal.clear()?;
+    result
+}
+
 /// Add a connection without leaving the picker.
 fn add_interactively(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -360,8 +373,7 @@ fn edit_interactively(
     let Some(existing) = store.get(id).cloned() else {
         return Ok(None);
     };
-    let defaults = cli::AddArgs::from_connection(&existing);
-    let Some(mut updated) = prompt_outside_tui(terminal, guard, defaults)? else {
+    let Some(mut updated) = edit_outside_tui(terminal, guard, &existing)? else {
         return Ok(None);
     };
     // Keep the handle and the history: a rename here must not break `connect <id>`.

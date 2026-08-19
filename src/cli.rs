@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use inquire::{Confirm, MultiSelect, Text};
+use inquire::{Confirm, MultiSelect, Select, Text};
 
 use crate::model::{Connection, Store};
 use crate::store::StoreFile;
@@ -73,24 +73,6 @@ pub struct AddArgs {
     pub extra_ssh_args: Vec<String>,
     #[arg(long)]
     pub notes: Option<String>,
-}
-
-impl AddArgs {
-    /// Prefill the interactive form with a connection's current values, so editing
-    /// starts from what is already saved instead of from an empty form.
-    pub fn from_connection(conn: &Connection) -> Self {
-        Self {
-            name: Some(conn.name.clone()),
-            host: Some(conn.host.clone()),
-            user: conn.user.clone(),
-            port: Some(conn.port),
-            identity_file: conn.identity_file.clone(),
-            jump_host: conn.jump_host.clone(),
-            tags: conn.tags.clone(),
-            extra_ssh_args: conn.extra_ssh_args.clone(),
-            notes: conn.notes.clone(),
-        }
-    }
 }
 
 /// Carry over the parts of an entry that an edit must not disturb.
@@ -217,6 +199,196 @@ fn apply_overrides(
 fn blank_to_none(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// One editable field of a saved connection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Field {
+    Name,
+    Host,
+    User,
+    Port,
+    IdentityFile,
+    JumpHost,
+    Tags,
+    ExtraSshArgs,
+    Notes,
+}
+
+impl Field {
+    const ALL: [Field; 9] = [
+        Field::Name,
+        Field::Host,
+        Field::User,
+        Field::Port,
+        Field::IdentityFile,
+        Field::JumpHost,
+        Field::Tags,
+        Field::ExtraSshArgs,
+        Field::Notes,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Field::Name => "Name",
+            Field::Host => "Host",
+            Field::User => "User",
+            Field::Port => "Port",
+            Field::IdentityFile => "Identity file",
+            Field::JumpHost => "Jump host",
+            Field::Tags => "Tags",
+            Field::ExtraSshArgs => "Extra ssh args",
+            Field::Notes => "Notes",
+        }
+    }
+
+    /// The field's current value, or an em dash when it is unset.
+    fn value_of(self, conn: &Connection) -> String {
+        let raw = match self {
+            Field::Name => conn.name.clone(),
+            Field::Host => conn.host.clone(),
+            Field::User => conn.user.clone().unwrap_or_default(),
+            Field::Port => conn.port.to_string(),
+            Field::IdentityFile => conn.identity_file.clone().unwrap_or_default(),
+            Field::JumpHost => conn.jump_host.clone().unwrap_or_default(),
+            Field::Tags => conn.tags.join(", "),
+            Field::ExtraSshArgs => conn.extra_ssh_args.join(" "),
+            Field::Notes => conn.notes.clone().unwrap_or_default(),
+        };
+        if raw.is_empty() {
+            "—".to_string()
+        } else {
+            raw
+        }
+    }
+}
+
+/// Edit a saved connection by picking fields off a view of the whole record.
+///
+/// Walking every field in sequence — the way `add` does — is wrong for editing: it hides
+/// the record behind one prompt at a time and makes you confirm values you never intended
+/// to touch. Here the whole entry stays on screen, and only what you select changes.
+///
+/// Returns `None` when the edit was discarded or cancelled.
+pub fn edit_form(existing: &Connection) -> Result<Option<Connection>> {
+    let mut draft = existing.clone();
+    // Coming back from a field should leave the cursor where it was, not at the top:
+    // fixing three fields in a row should not mean scrolling down from Name each time.
+    let mut cursor = 0usize;
+
+    loop {
+        let mut options: Vec<String> = Field::ALL
+            .iter()
+            .map(|f| format!("{:<16} {}", f.label(), f.value_of(&draft)))
+            .collect();
+        let save_idx = options.len();
+        options.push("Save changes".to_string());
+        options.push("Discard".to_string());
+
+        // Showing the command the entry resolves to makes the effect of an edit concrete;
+        // an entry too broken to render one is reported at save time, not here.
+        let help = ssh::command_line(&draft)
+            .unwrap_or_else(|_| "this entry cannot be turned into an ssh command yet".into());
+
+        let choice = Select::new(&format!("Edit `{}`", existing.name), options)
+            .with_help_message(&help)
+            .with_page_size(11)
+            .with_starting_cursor(cursor)
+            .raw_prompt();
+
+        // Esc out of the menu discards, the same as picking Discard.
+        let Ok(choice) = choice else {
+            return Ok(None);
+        };
+
+        if choice.index == save_idx + 1 {
+            return Ok(None);
+        }
+        if choice.index == save_idx {
+            // Refuse to save something that could never connect, but keep the draft so the
+            // work is not thrown away.
+            match ssh::build_args(&draft) {
+                Ok(_) => return Ok(Some(draft)),
+                Err(e) => {
+                    eprintln!("  cannot save: {e:#}");
+                    continue;
+                }
+            }
+        }
+
+        cursor = choice.index;
+        edit_one_field(Field::ALL[choice.index], &mut draft, existing)?;
+    }
+}
+
+/// Prompt for a single field, seeded with its current value.
+fn edit_one_field(field: Field, draft: &mut Connection, existing: &Connection) -> Result<()> {
+    let current = match field {
+        Field::Tags => draft.tags.join(", "),
+        Field::ExtraSshArgs => draft.extra_ssh_args.join(" "),
+        Field::Port => draft.port.to_string(),
+        Field::Name => draft.name.clone(),
+        Field::Host => draft.host.clone(),
+        Field::User => draft.user.clone().unwrap_or_default(),
+        Field::IdentityFile => draft.identity_file.clone().unwrap_or_default(),
+        Field::JumpHost => draft.jump_host.clone().unwrap_or_default(),
+        Field::Notes => draft.notes.clone().unwrap_or_default(),
+    };
+
+    let prompt = match field {
+        Field::Tags => "Tags (comma separated)".to_string(),
+        Field::ExtraSshArgs => "Extra ssh args (space separated)".to_string(),
+        other => other.label().to_string(),
+    };
+
+    // Cancelling a single field leaves the draft alone rather than aborting the whole edit.
+    let mut text = Text::new(&prompt);
+    if !current.is_empty() {
+        text = text.with_initial_value(&current);
+    }
+    let Ok(value) = text.prompt() else {
+        return Ok(());
+    };
+    let value = value.trim().to_string();
+
+    match field {
+        Field::Name => {
+            if value.is_empty() {
+                eprintln!("  name is required; left unchanged");
+            } else {
+                draft.name = value;
+            }
+        }
+        Field::Host => {
+            if value.is_empty() {
+                eprintln!("  host is required; left unchanged");
+            } else {
+                draft.host = value;
+            }
+        }
+        Field::Port => match value.parse::<u16>() {
+            Ok(p) if p > 0 => draft.port = p,
+            _ => eprintln!("  not a valid port (1-65535); left unchanged"),
+        },
+        Field::User => draft.user = blank_to_none(&value),
+        Field::IdentityFile => draft.identity_file = blank_to_none(&value),
+        Field::JumpHost => draft.jump_host = blank_to_none(&value),
+        Field::Notes => draft.notes = blank_to_none(&value),
+        Field::Tags => {
+            draft.tags = value.split(',').filter_map(blank_to_none).collect();
+        }
+        Field::ExtraSshArgs => {
+            // Splitting on whitespace cannot express an argument that contains a space, so
+            // an untouched line keeps the original vector verbatim — editing other fields
+            // can never quietly flatten `-o "ProxyCommand=ssh -W %h:%p bastion"`.
+            if value == existing.extra_ssh_args.join(" ") {
+                draft.extra_ssh_args = existing.extra_ssh_args.clone();
+            } else {
+                draft.extra_ssh_args = value.split_whitespace().map(str::to_string).collect();
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The interactive form used by `add` and by Ctrl-A inside the picker.
@@ -399,7 +571,13 @@ pub fn edit(args: EditArgs) -> Result<()> {
         ssh::build_args(&c)?;
         c
     } else {
-        prompt_for_connection(AddArgs::from_connection(&existing))?
+        match edit_form(&existing)? {
+            Some(updated) => updated,
+            None => {
+                println!("No changes to `{}`.", existing.id);
+                return Ok(());
+            }
+        }
     };
 
     carry_over_identity(&mut updated, &existing);

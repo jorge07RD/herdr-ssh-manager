@@ -74,7 +74,7 @@ Both also show up wherever Herdr lists plugin actions.
 | `↑` `↓` / `Ctrl-P` `Ctrl-N` | move the selection |
 | `Enter` | connect — runs `ssh` in your current pane, or a new tab if it is busy |
 | `Ctrl-A` | add a connection without leaving the picker |
-| `Ctrl-E` | edit the selected connection, prefilled with what is saved |
+| `Ctrl-E` | edit the selected connection |
 | `Ctrl-D` | delete the selected connection (asks first) |
 | `Esc` | clear the filter; on an empty filter, close |
 | `q` / `Ctrl-C` | close without connecting |
@@ -82,9 +82,37 @@ Both also show up wherever Herdr lists plugin actions.
 Every printable key goes to the filter, fzf-style, which is why add, edit and delete sit on
 control chords rather than on `a`, `e` and `d`.
 
+### Editing
+
+`Ctrl-E` — and `herdr-ssh-manager edit <id>` — shows the whole record and lets you change one
+field at a time, rather than walking you through every field in sequence:
+
+```
+? Edit `Prod DB`
+> Name             Prod DB
+  Host             db.example.com
+  User             deploy
+  Port             2222
+  Identity file    ~/.ssh/id_ed25519
+  Jump host        bastion.example.com
+  Tags             prod, db
+  Extra ssh args   -o ServerAliveInterval=30
+  Notes            primary replica
+  Save changes
+  Discard
+[ssh -p 2222 -i ~/.ssh/id_ed25519 -J bastion.example.com -o ServerAliveInterval=30 deploy@db.example.com]
+```
+
+The help line shows the `ssh` command the entry currently resolves to, so the effect of a
+change is visible before you save. Nothing is written until you pick **Save changes**, and the
+cursor stays on the field you just edited. `Discard`, or `Esc`, leaves the entry untouched.
+
 Editing keeps the connection's id and its last-connected time, so renaming an entry never
-breaks `herdr-ssh-manager connect <id>` or loses its history. Your filter is left alone too —
-you narrowed the list to reach that entry.
+breaks `herdr-ssh-manager connect <id>` or loses its history. In the picker your filter is left
+alone too — you narrowed the list to reach that entry.
+
+`herdr-ssh-manager edit <id> --port 2200` still works for scripting; passing any field flag
+skips the interactive view entirely.
 
 ![Typing narrows the list to matching connections](docs/picker-filter.png)
 
