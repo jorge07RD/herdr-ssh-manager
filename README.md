@@ -27,8 +27,22 @@ work in progress.
 herdr plugin install jorge07RD/herdr-ssh-manager
 ```
 
-Installing runs `cargo build --release`, so a [Rust toolchain](https://rustup.rs) needs to be
-on the machine. Requires Herdr **0.8.0** or newer.
+Requires Herdr **0.8.0** or newer. **No Rust toolchain needed** on the platforms below:
+installing downloads the prebuilt binary for this release and verifies its SHA-256 before
+putting it in place.
+
+| Platform | Prebuilt |
+| --- | --- |
+| macOS, Apple Silicon | `aarch64-apple-darwin` |
+| macOS, Intel | `x86_64-apple-darwin` |
+| Linux x86_64 | `x86_64-unknown-linux-musl` (static) |
+| Windows x86_64 | `x86_64-pc-windows-msvc` |
+| anything else (Linux ARM, …) | builds from source |
+
+Anywhere else — and on any download failure, checksum mismatch, or version with no published
+release — the install step explains why and falls back to `cargo build --release`, which needs
+[Rust](https://rustup.rs) 1.85+. So installing is never harder than compiling, and usually
+much faster.
 
 ## Keybinding
 

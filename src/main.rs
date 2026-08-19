@@ -44,3 +44,26 @@ fn run() -> anyhow::Result<()> {
 fn is_popup() -> bool {
     std::env::var("HERDR_PLUGIN_ENTRYPOINT_ID").is_ok_and(|v| !v.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    /// The plugin manifest carries its own `version`, and Herdr shows *that* one while the
+    /// binary reports Cargo's. Bumping one and forgetting the other ships a release whose
+    /// advertised version does not match what it installs, which nothing else would catch.
+    #[test]
+    fn cargo_and_plugin_manifest_versions_agree() {
+        let manifest = include_str!("../herdr-plugin.toml");
+        let declared = manifest
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix("version = "))
+            .map(|v| v.trim().trim_matches('"'))
+            .expect("herdr-plugin.toml declares no top-level version");
+        assert_eq!(
+            declared,
+            env!("CARGO_PKG_VERSION"),
+            "herdr-plugin.toml says {declared}, Cargo.toml says {}",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+}

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  lint:
+    name: rustfmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    # 1.85 is the floor declared in Cargo.toml (set by clap 4.6); building it here is what
+    # keeps that claim honest rather than aspirational.
+    name: test (${{ matrix.os }}, rust ${{ matrix.rust }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        rust: ["1.85", "stable"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+      # The suite is hermetic: temp dirs and checked-in fixtures, no network and no running
+      # herdr, so it needs nothing installed beyond the toolchain.
+      - run: cargo test
+
+  build-script:
+    name: fetch-or-build.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shell syntax
+        run: sh -n scripts/fetch-or-build.sh
+      # Exercises every fallback path with stubbed uname/curl/cargo and a local stand-in for
+      # the GitHub release — no network involved.
+      - name: hermetic tests
+        run: sh scripts/tests/fetch-or-build.test.sh
+
+  windows:
+    # Windows is preview for this plugin: the popup panes cannot launch there (herdr resolves
+    # the manifest's relative command against its own directory). The CLI does work, so it is
+    # still worth testing — but advisory, so a Windows-only flake cannot block an unrelated PR.
+    name: test (windows-latest, advisory)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+      - name: PowerShell build script parses
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "scripts/fetch-or-build.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host "fetch-or-build.ps1 parses cleanly"
+
+  audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit

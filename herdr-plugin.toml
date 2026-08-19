@@ -17,14 +17,25 @@
 
 id = "herdr-ssh-manager"
 name = "SSH Manager"
-version = "0.3.0"
+version = "0.4.0"
 min_herdr_version = "0.8.0"
 description = "Save and reconnect to SSH hosts from Herdr"
 platforms = ["linux", "macos", "windows"]
 
-# Requires a Rust toolchain on the machine (same as any cargo-built plugin).
+# Install downloads the prebuilt binary for this platform from the matching GitHub release and
+# verifies its SHA-256, so no Rust toolchain is needed on the common platforms. On any miss —
+# no release for this version, an unpublished platform (Linux ARM), a network or checksum
+# failure — the script says why and builds from source with cargo instead, which is exactly
+# what installing did before prebuilts existed.
+#
+# herdr runs only the entry whose `platforms` matches the host.
 [[build]]
-command = ["cargo", "build", "--release"]
+platforms = ["linux", "macos"]
+command = ["/bin/sh", "scripts/fetch-or-build.sh"]
+
+[[build]]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/fetch-or-build.ps1"]
 
 # The fuzzy picker. Enter replaces this popup's process with the real ssh session,
 # so the popup *becomes* the connection and closes when the session ends.

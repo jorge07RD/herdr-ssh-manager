@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.triple }}
+    strategy:
+      # One missing target would publish a release that 404s for those users, so stop the
+      # whole run rather than ship a partial set.
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+          - os: macos-latest
+            triple: x86_64-apple-darwin
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-musl
+          # Windows is preview: the CLI works, the popup panes do not. Shipping the binary
+          # anyway is what makes the CLI usable there without a toolchain.
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The install script picks its prebuilt by the version this source DECLARES, and herdr
+      # shows the manifest's version. If the tag, Cargo.toml and herdr-plugin.toml ever
+      # disagree, the release would advertise one version and install another — so refuse to
+      # build at all rather than publish that.
+      - name: Tag must match both declared versions
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(grep -E '^version *= *"' Cargo.toml | head -n1 | sed -E 's/^version *= *"([^"]+)".*/\1/')"
+          manifest="$(grep -E '^version *= *"' herdr-plugin.toml | head -n1 | sed -E 's/^version *= *"([^"]+)".*/\1/')"
+          echo "tag=$tag cargo=$crate manifest=$manifest"
+          [ "$tag" = "$crate" ]    || { echo "::error::tag $tag != Cargo.toml $crate"; exit 1; }
+          [ "$tag" = "$manifest" ] || { echo "::error::tag $tag != herdr-plugin.toml $manifest"; exit 1; }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+
+      # musl needs its own C toolchain for the linker even though the tree has no C deps.
+      - name: Install musl tools
+        if: matrix.triple == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - run: cargo build --release --target ${{ matrix.triple }}
+
+      - name: Stage asset and checksum
+        shell: bash
+        run: |
+          mkdir -p dist
+          triple="${{ matrix.triple }}"
+          # The .exe suffix is the only per-OS difference in the whole release flow; the
+          # publish job below treats every asset identically.
+          if [[ "$triple" == *windows* ]]; then
+            src="target/$triple/release/herdr-ssh-manager.exe"
+            asset="herdr-ssh-manager-$triple.exe"
+          else
+            src="target/$triple/release/herdr-ssh-manager"
+            asset="herdr-ssh-manager-$triple"
+          fi
+          cp "$src" "dist/$asset"
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > "$asset.sha256"
+          else
+            shasum -a 256 "$asset" > "$asset.sha256"
+          fi
+          cat "$asset.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.triple }}
+          path: dist/*
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble assets and SHA256SUMS
+        shell: bash
+        run: |
+          mkdir -p release
+          find artifacts -type f -name 'herdr-ssh-manager-*' ! -name '*.sha256' -exec cp {} release/ \;
+          cat artifacts/*/*.sha256 > release/SHA256SUMS
+          echo "Publishing:"; ls -l release
+          echo "--- SHA256SUMS ---"; cat release/SHA256SUMS
+          # Four binaries or the release is incomplete for somebody.
+          count=$(find release -type f -name 'herdr-ssh-manager-*' | wc -l)
+          [ "$count" -eq 4 ] || { echo "::error::expected 4 binaries, found $count"; exit 1; }
+
+      - name: Create release and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                 --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" release/* --clobber --repo "$GITHUB_REPOSITORY"
