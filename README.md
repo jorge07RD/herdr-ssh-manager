@@ -74,12 +74,17 @@ Both also show up wherever Herdr lists plugin actions.
 | `↑` `↓` / `Ctrl-P` `Ctrl-N` | move the selection |
 | `Enter` | connect — runs `ssh` in your current pane, or a new tab if it is busy |
 | `Ctrl-A` | add a connection without leaving the picker |
+| `Ctrl-E` | edit the selected connection, prefilled with what is saved |
 | `Ctrl-D` | delete the selected connection (asks first) |
 | `Esc` | clear the filter; on an empty filter, close |
 | `q` / `Ctrl-C` | close without connecting |
 
-Every printable key goes to the filter, fzf-style, which is why add and delete sit on
-control chords rather than on `a` and `d`.
+Every printable key goes to the filter, fzf-style, which is why add, edit and delete sit on
+control chords rather than on `a`, `e` and `d`.
+
+Editing keeps the connection's id and its last-connected time, so renaming an entry never
+breaks `herdr-ssh-manager connect <id>` or loses its history. Your filter is left alone too —
+you narrowed the list to reach that entry.
 
 ![Typing narrows the list to matching connections](docs/picker-filter.png)
 

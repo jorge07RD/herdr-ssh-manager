@@ -282,6 +282,20 @@ fn event_loop(
                 Err(e) => status = Some(format!("{e:#}")),
             },
 
+            (KeyCode::Char('e'), true) => {
+                let Some(id) = matches.get(selected).map(|c| c.id.clone()) else {
+                    status = Some("Nothing to edit.".into());
+                    continue;
+                };
+                match edit_interactively(terminal, guard, file, store, &id) {
+                    // The filter is deliberately left alone: the user narrowed the list to
+                    // reach this entry, and editing it is no reason to lose that.
+                    Ok(Some(name)) => status = Some(format!("Updated `{name}`.")),
+                    Ok(None) => status = Some("Edit cancelled.".into()),
+                    Err(e) => status = Some(format!("{e:#}")),
+                }
+            }
+
             (KeyCode::Char('d'), true) => {
                 if let Some(conn) = matches.get(selected) {
                     mode = Mode::ConfirmDelete {
@@ -305,26 +319,57 @@ fn event_loop(
 }
 
 /// Drop out of the TUI, run the inquire form on the normal screen, then come back.
+///
+/// Returns the form's result, or `None` when the user cancelled — backing out of a form is a
+/// normal way to leave it, not an error worth shouting about.
+fn prompt_outside_tui(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    guard: &mut TerminalGuard,
+    defaults: cli::AddArgs,
+) -> Result<Option<Connection>> {
+    guard.restore();
+    let result = cli::prompt_for_connection(defaults);
+    *guard = TerminalGuard::enter()?;
+    terminal.clear()?;
+    Ok(result.ok())
+}
+
+/// Add a connection without leaving the picker.
 fn add_interactively(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     guard: &mut TerminalGuard,
     file: &StoreFile,
     store: &mut Store,
 ) -> Result<Option<String>> {
-    guard.restore();
-    let result = cli::prompt_for_connection(cli::AddArgs::default());
-    *guard = TerminalGuard::enter()?;
-    terminal.clear()?;
+    let Some(conn) = prompt_outside_tui(terminal, guard, cli::AddArgs::default())? else {
+        return Ok(None);
+    };
+    let id = store.insert_unique(conn);
+    file.save(store)?;
+    Ok(Some(id))
+}
 
-    match result {
-        Ok(conn) => {
-            let id = store.insert_unique(conn);
-            file.save(store)?;
-            Ok(Some(id))
-        }
-        // A cancelled prompt is a normal way out, not an error worth shouting about.
-        Err(_) => Ok(None),
-    }
+/// Edit the selected connection, with the form prefilled from what is saved.
+fn edit_interactively(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    guard: &mut TerminalGuard,
+    file: &StoreFile,
+    store: &mut Store,
+    id: &str,
+) -> Result<Option<String>> {
+    let Some(existing) = store.get(id).cloned() else {
+        return Ok(None);
+    };
+    let defaults = cli::AddArgs::from_connection(&existing);
+    let Some(mut updated) = prompt_outside_tui(terminal, guard, defaults)? else {
+        return Ok(None);
+    };
+    // Keep the handle and the history: a rename here must not break `connect <id>`.
+    cli::carry_over_identity(&mut updated, &existing);
+    let name = updated.name.clone();
+    *store.get_mut(id).expect("checked above") = updated;
+    file.save(store)?;
+    Ok(Some(name))
 }
 
 /// Score every connection against the query; an empty query keeps recency order.
@@ -423,24 +468,46 @@ fn draw(
             format!("  {msg}"),
             Style::new().fg(Color::Yellow),
         )),
-        None => Line::from(vec![
-            Span::raw("  "),
-            key_hint("↑↓", "move"),
-            key_hint("enter", "connect"),
-            key_hint("^A", "add"),
-            key_hint("^D", "delete"),
-            key_hint("esc", "close"),
-            Span::styled(
-                format!("{} saved", store.connections.len()),
-                Style::new().fg(Color::DarkGray),
-            ),
-        ]),
+        None => Line::from(footer_hints(chunks[2].width, store.connections.len())),
     };
     frame.render_widget(Paragraph::new(footer), chunks[2]);
 
     if let Mode::ConfirmDelete { label, .. } = mode {
         draw_confirm(frame, label);
     }
+}
+
+/// The key help, in a form that fits the pane it is drawn in.
+///
+/// The picker's popup is a percentage of the terminal, so on a narrow window the full hint
+/// line would simply be clipped — and it is the rightmost hints that would vanish. Falling
+/// back to a shorter wording keeps every key visible instead of silently losing some.
+fn footer_hints(width: u16, saved: usize) -> Vec<Span<'static>> {
+    let full = vec![
+        Span::raw("  "),
+        key_hint("↑↓", "move"),
+        key_hint("enter", "connect"),
+        key_hint("^A", "add"),
+        key_hint("^E", "edit"),
+        key_hint("^D", "delete"),
+        key_hint("esc", "close"),
+        Span::styled(format!("{saved} saved"), Style::new().fg(Color::DarkGray)),
+    ];
+    if line_width(&full) <= width as usize {
+        return full;
+    }
+    vec![
+        Span::raw("  "),
+        key_hint("⏎", "connect"),
+        key_hint("^A", "add"),
+        key_hint("^E", "edit"),
+        key_hint("^D", "del"),
+        Span::styled("esc close", Style::new().fg(Color::DarkGray)),
+    ]
+}
+
+fn line_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| s.content.chars().count()).sum()
 }
 
 fn key_hint(key: &str, label: &str) -> Span<'static> {
@@ -606,6 +673,29 @@ mod tests {
         assert_eq!(humanize_since(now - ChronoDuration::days(800)), "2y ago");
         // A clock that jumped backwards must not render a negative age.
         assert_eq!(humanize_since(now + ChronoDuration::hours(1)), "just now");
+    }
+
+    #[test]
+    fn the_footer_fits_the_width_it_is_given() {
+        // Wide enough for everything.
+        let wide = footer_hints(100, 6);
+        assert!(line_width(&wide) <= 100);
+        let text: String = wide.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("^E edit"), "missing the edit hint: {text}");
+        assert!(text.contains("6 saved"));
+
+        // A 70%-of-100-columns popup: the full line does not fit, so the short one is used
+        // and still names every key.
+        let narrow = footer_hints(70, 6);
+        assert!(
+            line_width(&narrow) <= 70,
+            "footer is {} wide in a 70-column pane",
+            line_width(&narrow)
+        );
+        let text: String = narrow.iter().map(|s| s.content.as_ref()).collect();
+        for key in ["^A", "^E", "^D", "esc"] {
+            assert!(text.contains(key), "narrow footer lost {key}: {text}");
+        }
     }
 
     #[test]

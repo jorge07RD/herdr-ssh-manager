@@ -75,6 +75,33 @@ pub struct AddArgs {
     pub notes: Option<String>,
 }
 
+impl AddArgs {
+    /// Prefill the interactive form with a connection's current values, so editing
+    /// starts from what is already saved instead of from an empty form.
+    pub fn from_connection(conn: &Connection) -> Self {
+        Self {
+            name: Some(conn.name.clone()),
+            host: Some(conn.host.clone()),
+            user: conn.user.clone(),
+            port: Some(conn.port),
+            identity_file: conn.identity_file.clone(),
+            jump_host: conn.jump_host.clone(),
+            tags: conn.tags.clone(),
+            extra_ssh_args: conn.extra_ssh_args.clone(),
+            notes: conn.notes.clone(),
+        }
+    }
+}
+
+/// Carry over the parts of an entry that an edit must not disturb.
+///
+/// The id is the user's handle for this connection — scripts and `connect <id>` use it — so
+/// renaming must not invalidate it. The timestamp is history, not something being edited.
+pub fn carry_over_identity(updated: &mut Connection, existing: &Connection) {
+    updated.id = existing.id.clone();
+    updated.last_connected_at = existing.last_connected_at;
+}
+
 #[derive(Args, Debug)]
 pub struct ListArgs {
     /// Emit JSON instead of a table
@@ -372,22 +399,10 @@ pub fn edit(args: EditArgs) -> Result<()> {
         ssh::build_args(&c)?;
         c
     } else {
-        prompt_for_connection(AddArgs {
-            name: Some(existing.name.clone()),
-            host: Some(existing.host.clone()),
-            user: existing.user.clone(),
-            port: Some(existing.port),
-            identity_file: existing.identity_file.clone(),
-            jump_host: existing.jump_host.clone(),
-            tags: existing.tags.clone(),
-            extra_ssh_args: existing.extra_ssh_args.clone(),
-            notes: existing.notes.clone(),
-        })?
+        prompt_for_connection(AddArgs::from_connection(&existing))?
     };
 
-    // The id is the user's handle for this entry: renaming must not invalidate it.
-    updated.id = existing.id.clone();
-    updated.last_connected_at = existing.last_connected_at;
+    carry_over_identity(&mut updated, &existing);
     *store.get_mut(&args.id).expect("checked above") = updated;
     file.save(&store)?;
     println!(
