@@ -26,14 +26,15 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
 
   test:
-    # 1.85 is the floor declared in Cargo.toml (set by clap 4.6); building it here is what
+    # 1.88 is the floor declared in Cargo.toml (set by darling/instability, via ratatui);
+    # building on it here is what
     # keeps that claim honest rather than aspirational.
     name: test (${{ matrix.os }}, rust ${{ matrix.rust }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        rust: ["1.85", "stable"]
+        rust: ["1.88", "stable"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

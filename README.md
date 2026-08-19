@@ -41,7 +41,7 @@ putting it in place.
 
 Anywhere else — and on any download failure, checksum mismatch, or version with no published
 release — the install step explains why and falls back to `cargo build --release`, which needs
-[Rust](https://rustup.rs) 1.85+. So installing is never harder than compiling, and usually
+[Rust](https://rustup.rs) 1.88+. So installing is never harder than compiling, and usually
 much faster.
 
 ## Keybinding

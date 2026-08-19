@@ -2,7 +2,7 @@
 name = "herdr-ssh-manager"
 version = "0.4.0"
 edition = "2021"
-rust-version = "1.85"          # floor set by clap 4.6; verified in CI
+rust-version = "1.88"          # floor set by darling/instability, pulled in via ratatui
 description = "Save and reconnect to SSH hosts from Herdr"
 license = "MIT"
 repository = "https://github.com/jorge07RD/herdr-ssh-manager"

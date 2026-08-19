@@ -22,7 +22,7 @@ $baseUrl   = if ($env:SSHM_BASE_URL)   { $env:SSHM_BASE_URL }   else { "https://
 
 function Build-FromSource {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-        Write-Error "$bin`: needs Rust 1.85+ to build from source, but cargo was not found. Install Rust from https://rustup.rs and re-run: herdr plugin install $repo"
+        Write-Error "$bin`: needs Rust 1.88+ to build from source, but cargo was not found. Install Rust from https://rustup.rs and re-run: herdr plugin install $repo"
         exit 1
     }
     Push-Location $repoRoot

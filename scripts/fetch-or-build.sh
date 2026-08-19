@@ -36,7 +36,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 build_from_source() {
     [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
     if ! have cargo; then
-        echo "$bin: needs Rust 1.85+ to build from source, but cargo was not found." >&2
+        echo "$bin: needs Rust 1.88+ to build from source, but cargo was not found." >&2
         echo "$bin: install Rust from https://rustup.rs and re-run: herdr plugin install $repo" >&2
         exit 1
     fi
