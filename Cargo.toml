@@ -1,0 +1,36 @@
+[package]
+name = "herdr-ssh-manager"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Save and reconnect to SSH hosts from Herdr"
+license = "MIT"
+repository = "https://github.com/jorge07RD/herdr-ssh-manager"
+readme = "README.md"
+
+[[bin]]
+name = "herdr-ssh-manager"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+inquire = "0.7"
+ratatui = "0.29"
+crossterm = "0.28"
+nucleo-matcher = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+# NOTE: deliberately NOT panic = "abort" — the picker restores the terminal from a
+# Drop guard, which only runs while unwinding.

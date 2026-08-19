@@ -1,0 +1,60 @@
+# herdr-plugin.toml — manifest for herdr-ssh-manager.
+#
+# A saved-connection manager for SSH: store hosts, fuzzy-find them in a modal popup,
+# and hand the popup over to the real `ssh` session with a single Enter.
+#
+# Notes verified against herdr 0.8.0:
+#  - Keybindings are NOT declared here. The manifest accepts only id, name, version,
+#    min_herdr_version, description, platforms, build, startup, actions, events, panes
+#    and link_handlers. Users bind `prefix+s` in their own herdr config.toml — see README.
+#  - `width`/`height` are only accepted when `placement = "popup"`.
+#  - `[[build]]` runs on `herdr plugin install`, never on `herdr plugin link`. For a local
+#    checkout, build it yourself with `cargo build --release`.
+#  - Pane/action commands are relative to the plugin root. On Windows herdr hands the
+#    relative program to CreateProcessW, which resolves it against herdr's own directory
+#    and does not append `.exe`, so the popup panes do not launch there. The CLI
+#    subcommands work fine on Windows — see the README's Windows section.
+
+id = "herdr-ssh-manager"
+name = "SSH Manager"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Save and reconnect to SSH hosts from Herdr"
+platforms = ["linux", "macos", "windows"]
+
+# Requires a Rust toolchain on the machine (same as any cargo-built plugin).
+[[build]]
+command = ["cargo", "build", "--release"]
+
+# The fuzzy picker. Enter replaces this popup's process with the real ssh session,
+# so the popup *becomes* the connection and closes when the session ends.
+[[panes]]
+id = "picker"
+title = "SSH Connections"
+placement = "popup"
+width = "70%"
+height = 20
+command = ["./target/release/herdr-ssh-manager", "pick"]
+
+[[panes]]
+id = "add"
+title = "Add SSH Connection"
+placement = "popup"
+width = "70%"
+height = 18
+command = ["./target/release/herdr-ssh-manager", "add"]
+
+# Actions open the popups above. They shell out to $HERDR_BIN_PATH from Rust rather
+# than through `sh -c`, so the launcher works the same on every platform and can report
+# a clear error when the variable is missing.
+[[actions]]
+id = "open-picker"
+title = "SSH: open connections"
+contexts = ["workspace", "global"]
+command = ["./target/release/herdr-ssh-manager", "open-picker"]
+
+[[actions]]
+id = "open-add"
+title = "SSH: add connection"
+contexts = ["workspace", "global"]
+command = ["./target/release/herdr-ssh-manager", "open-add"]

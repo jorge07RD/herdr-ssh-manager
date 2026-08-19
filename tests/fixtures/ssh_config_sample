@@ -1,0 +1,40 @@
+# Sample ssh_config used by the import parser tests.
+
+Host *
+    ServerAliveInterval 60
+    IdentityFile ~/.ssh/id_default
+
+Host web
+    HostName web01.example.com
+    User deploy
+    Port 2222
+    IdentityFile ~/.ssh/id_ed25519
+
+# Several aliases share one block.
+Host db-a db-b
+	HostName db.example.com
+	User postgres
+
+Host oddly-formatted
+  hostname=odd.example.com
+  USER = root
+  PoRt=23
+
+Host behind-bastion
+    HostName internal.example.com
+    ProxyJump bastion.example.com
+
+Host repeated
+    User first
+    User second
+
+Host bare
+
+Host !prod web-? *.internal
+    User ignored
+
+Host after-match
+    HostName am.example.com
+
+Match host anything
+    User nobody

@@ -1,0 +1,569 @@
+//! The fuzzy picker shown in the Herdr popup pane.
+//!
+//! Everything printable goes to the filter (fzf-style), so the destructive actions sit
+//! on control chords: Ctrl-A adds, Ctrl-D deletes. Enter records the connection time,
+//! puts the terminal back the way it was found, and hands the process to `ssh` — which
+//! on Unix means this popup *becomes* the session.
+
+use anyhow::{Context, Result};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::{cursor, execute};
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher};
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use std::io::{self, Stdout};
+use std::time::Duration;
+
+use crate::model::{Connection, Store};
+use crate::store::StoreFile;
+use crate::{cli, ssh};
+
+/// Restores the terminal on the way out, including while a panic unwinds.
+struct TerminalGuard {
+    armed: bool,
+}
+
+impl TerminalGuard {
+    fn enter() -> Result<Self> {
+        enable_raw_mode().context("could not put the terminal into raw mode")?;
+        execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)
+            .context("could not switch to the alternate screen")?;
+        Ok(Self { armed: true })
+    }
+
+    /// Put the terminal back now, and stop the Drop impl from doing it again.
+    /// Must be called before exec'ing ssh: after that, Drop never runs.
+    fn restore(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
+        let _ = disable_raw_mode();
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
+/// What the event loop decided to do.
+enum Outcome {
+    Quit,
+    /// Connect, carrying any non-fatal complaint to print once the TUI is torn down.
+    /// Boxed to keep the enum small — `Quit` is by far the common case.
+    Connect(Box<(Connection, Option<String>)>),
+}
+
+/// A pending destructive action, drawn as a modal over the list.
+enum Mode {
+    Normal,
+    ConfirmDelete { id: String, label: String },
+}
+
+pub fn run() -> Result<()> {
+    let file = StoreFile::discover()?;
+    let mut store = file.load_reporting()?;
+
+    let mut guard = TerminalGuard::enter()?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
+        .context("could not initialise the terminal")?;
+
+    let outcome = event_loop(&mut terminal, &mut guard, &file, &mut store);
+
+    // Give the terminal back before doing anything that writes to it.
+    guard.restore();
+    let outcome = outcome?;
+
+    match outcome {
+        Outcome::Quit => Ok(()),
+        Outcome::Connect(payload) => {
+            let (conn, warning) = *payload;
+            if let Some(warning) = warning {
+                eprintln!("herdr-ssh-manager: {warning}");
+            }
+            ssh::connect(&conn)?;
+            unreachable!("exec replaces the process")
+        }
+    }
+}
+
+fn event_loop(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    guard: &mut TerminalGuard,
+    file: &StoreFile,
+    store: &mut Store,
+) -> Result<Outcome> {
+    let mut query = String::new();
+    let mut selected: usize = 0;
+    let mut mode = Mode::Normal;
+    let mut status: Option<String> = None;
+    let mut matcher = Matcher::new(Config::DEFAULT);
+
+    loop {
+        let matches = filter(store, &query, &mut matcher);
+        if selected >= matches.len() {
+            selected = matches.len().saturating_sub(1);
+        }
+
+        terminal.draw(|frame| {
+            draw(
+                frame,
+                store,
+                &matches,
+                &query,
+                selected,
+                &mode,
+                status.as_deref(),
+            )
+        })?;
+
+        if !event::poll(Duration::from_millis(250))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        // Windows reports both press and release; act on press only.
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
+        if let Mode::ConfirmDelete { id, .. } = &mode {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    let id = id.clone();
+                    let removed = store.remove(&id);
+                    match file.save(store) {
+                        Ok(()) => {
+                            status = removed.map(|c| format!("Deleted `{}`.", c.id));
+                        }
+                        Err(e) => {
+                            // Put it back rather than diverge from what is on disk.
+                            if let Some(c) = removed {
+                                store.connections.push(c);
+                            }
+                            status = Some(format!("Could not save: {e:#}"));
+                        }
+                    }
+                    mode = Mode::Normal;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    mode = Mode::Normal;
+                    status = None;
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        status = None;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match (key.code, ctrl) {
+            (KeyCode::Esc, _) => {
+                // Esc clears a filter first; only an empty filter closes the picker.
+                if query.is_empty() {
+                    return Ok(Outcome::Quit);
+                }
+                query.clear();
+                selected = 0;
+            }
+            (KeyCode::Char('c'), true) | (KeyCode::Char('q'), true) => return Ok(Outcome::Quit),
+            (KeyCode::Char('q'), false) if query.is_empty() => return Ok(Outcome::Quit),
+
+            (KeyCode::Down, _) | (KeyCode::Char('n'), true) => {
+                if !matches.is_empty() {
+                    selected = (selected + 1) % matches.len();
+                }
+            }
+            (KeyCode::Up, _) | (KeyCode::Char('p'), true) => {
+                if !matches.is_empty() {
+                    selected = selected.checked_sub(1).unwrap_or(matches.len() - 1);
+                }
+            }
+
+            (KeyCode::Enter, _) => {
+                let Some(conn) = matches.get(selected).map(|c| (*c).clone()) else {
+                    status = Some("Nothing to connect to.".into());
+                    continue;
+                };
+                // Validate before tearing the UI down so the error stays readable.
+                if let Err(e) = ssh::find_ssh().and_then(|_| ssh::build_args(&conn).map(|_| ())) {
+                    status = Some(format!("{e:#}"));
+                    continue;
+                }
+                if let Some(entry) = store.get_mut(&conn.id) {
+                    entry.last_connected_at = Some(chrono::Utc::now());
+                }
+                // Not fatal: connecting matters more than the timestamp, but the
+                // complaint has to outlive the TUI to be seen at all.
+                let warning = file
+                    .save(store)
+                    .err()
+                    .map(|e| format!("could not record the connection time: {e:#}"));
+                return Ok(Outcome::Connect(Box::new((conn, warning))));
+            }
+
+            (KeyCode::Char('a'), true) => match add_interactively(terminal, guard, file, store) {
+                Ok(Some(id)) => {
+                    query.clear();
+                    selected = 0;
+                    status = Some(format!("Saved `{id}`."));
+                }
+                Ok(None) => status = Some("Add cancelled.".into()),
+                Err(e) => status = Some(format!("{e:#}")),
+            },
+
+            (KeyCode::Char('d'), true) => {
+                if let Some(conn) = matches.get(selected) {
+                    mode = Mode::ConfirmDelete {
+                        id: conn.id.clone(),
+                        label: format!("{} ({})", conn.name, conn.destination()),
+                    };
+                }
+            }
+
+            (KeyCode::Backspace, _) => {
+                query.pop();
+                selected = 0;
+            }
+            (KeyCode::Char(c), false) => {
+                query.push(c);
+                selected = 0;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Drop out of the TUI, run the inquire form on the normal screen, then come back.
+fn add_interactively(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    guard: &mut TerminalGuard,
+    file: &StoreFile,
+    store: &mut Store,
+) -> Result<Option<String>> {
+    guard.restore();
+    let result = cli::prompt_for_connection(cli::AddArgs::default());
+    *guard = TerminalGuard::enter()?;
+    terminal.clear()?;
+
+    match result {
+        Ok(conn) => {
+            let id = store.insert_unique(conn);
+            file.save(store)?;
+            Ok(Some(id))
+        }
+        // A cancelled prompt is a normal way out, not an error worth shouting about.
+        Err(_) => Ok(None),
+    }
+}
+
+/// Score every connection against the query; an empty query keeps recency order.
+fn filter<'a>(store: &'a Store, query: &str, matcher: &mut Matcher) -> Vec<&'a Connection> {
+    if query.trim().is_empty() {
+        return store.sorted_by_recency();
+    }
+    let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+    let mut scored: Vec<(u32, &Connection)> = store
+        .connections
+        .iter()
+        .filter_map(|conn| {
+            let mut buf = Vec::new();
+            let haystack = conn.search_text();
+            pattern
+                .score(nucleo_matcher::Utf32Str::new(&haystack, &mut buf), matcher)
+                .map(|score| (score, conn))
+        })
+        .collect();
+    // Highest score first; ties fall back to most recently used.
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(b.1.last_connected_at.cmp(&a.1.last_connected_at))
+    });
+    scored.into_iter().map(|(_, c)| c).collect()
+}
+
+fn draw(
+    frame: &mut Frame,
+    store: &Store,
+    matches: &[&Connection],
+    query: &str,
+    selected: usize,
+    mode: &Mode,
+    status: Option<&str>,
+) {
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(frame.area());
+
+    // Search line.
+    let prompt = Line::from(vec![
+        Span::styled(
+            "  > ",
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(query),
+        Span::styled("▏", Style::new().fg(Color::Cyan)),
+    ]);
+    frame.render_widget(Paragraph::new(prompt), chunks[0]);
+
+    // Results, or an empty state.
+    if store.connections.is_empty() {
+        let msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No saved connections yet.",
+                Style::new().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("  Press Ctrl-A to add one now,"),
+            Line::from("  or run `herdr-ssh-manager import` to pull in your ~/.ssh/config."),
+        ])
+        .wrap(Wrap { trim: false });
+        frame.render_widget(msg, chunks[1]);
+    } else if matches.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "    no match",
+                Style::new().fg(Color::DarkGray),
+            ))),
+            chunks[1],
+        );
+    } else {
+        let items: Vec<ListItem> = matches.iter().map(|c| ListItem::new(row(c))).collect();
+        let list = List::new(items)
+            // The symbol also indents every row, selected or not, so the list lines up
+            // under the search prompt above it.
+            .highlight_symbol("  ▌ ")
+            .highlight_style(
+                Style::new()
+                    .bg(Color::Indexed(238))
+                    .add_modifier(Modifier::BOLD),
+            );
+        let mut state = ListState::default();
+        state.select(Some(selected));
+        frame.render_stateful_widget(list, chunks[1], &mut state);
+    }
+
+    // Footer: a status message when there is one, otherwise the key help.
+    let footer = match status {
+        Some(msg) => Line::from(Span::styled(
+            format!("  {msg}"),
+            Style::new().fg(Color::Yellow),
+        )),
+        None => Line::from(vec![
+            Span::raw("  "),
+            key_hint("↑↓", "move"),
+            key_hint("enter", "connect"),
+            key_hint("^A", "add"),
+            key_hint("^D", "delete"),
+            key_hint("esc", "close"),
+            Span::styled(
+                format!("{} saved", store.connections.len()),
+                Style::new().fg(Color::DarkGray),
+            ),
+        ]),
+    };
+    frame.render_widget(Paragraph::new(footer), chunks[2]);
+
+    if let Mode::ConfirmDelete { label, .. } = mode {
+        draw_confirm(frame, label);
+    }
+}
+
+fn key_hint(key: &str, label: &str) -> Span<'static> {
+    Span::styled(
+        format!("{key} {label}   "),
+        Style::new().fg(Color::DarkGray),
+    )
+}
+
+fn row(conn: &Connection) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(
+            format!("{:<18}", truncate(&conn.name, 18)),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<30}", truncate(&conn.destination(), 30)),
+            Style::new().fg(Color::Cyan),
+        ),
+    ];
+    if !conn.tags.is_empty() {
+        spans.push(Span::styled(
+            format!("{}  ", conn.tags.join(",")),
+            Style::new().fg(Color::Magenta),
+        ));
+    }
+    if let Some(ts) = conn.last_connected_at {
+        spans.push(Span::styled(
+            humanize_since(ts),
+            Style::new().fg(Color::DarkGray),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn draw_confirm(frame: &mut Frame, label: &str) {
+    let area = centered_rect(frame.area(), 60, 5);
+    frame.render_widget(Clear, area);
+    let body = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(format!("  Delete {label}?")),
+        Line::from(Span::styled("  y / n", Style::new().fg(Color::DarkGray))),
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(Color::Red))
+            .title(" Confirm "),
+    );
+    frame.render_widget(body, area);
+}
+
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
+/// Coarse "how long ago", good enough for a one-line hint.
+pub fn humanize_since(ts: chrono::DateTime<chrono::Utc>) -> String {
+    let secs = (chrono::Utc::now() - ts).num_seconds();
+    if secs < 0 {
+        return "just now".into();
+    }
+    let (n, unit) = match secs {
+        s if s < 60 => return "just now".into(),
+        s if s < 3_600 => (s / 60, "m"),
+        s if s < 86_400 => (s / 3_600, "h"),
+        s if s < 2_592_000 => (s / 86_400, "d"),
+        s if s < 31_536_000 => (s / 2_592_000, "mo"),
+        s => (s / 31_536_000, "y"),
+    };
+    format!("{n}{unit} ago")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration as ChronoDuration;
+
+    fn store_with(names: &[(&str, &str)]) -> Store {
+        let mut store = Store::default();
+        for (name, host) in names {
+            store.insert_unique(Connection::new(*name, *host));
+        }
+        store
+    }
+
+    #[test]
+    fn an_empty_query_returns_everything_in_recency_order() {
+        let mut store = store_with(&[("web", "w.example"), ("db", "d.example")]);
+        store.get_mut("db").unwrap().last_connected_at = Some(chrono::Utc::now());
+        let mut matcher = Matcher::new(Config::DEFAULT);
+        let got: Vec<&str> = filter(&store, "", &mut matcher)
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(got, ["db", "web"]);
+        assert_eq!(filter(&store, "   ", &mut matcher).len(), 2);
+    }
+
+    #[test]
+    fn the_query_matches_name_host_and_tags() {
+        let mut store = store_with(&[("Prod DB", "db.example.com"), ("staging web", "web.stg")]);
+        store.get_mut("prod-db").unwrap().tags = vec!["critical".into()];
+        let mut matcher = Matcher::new(Config::DEFAULT);
+
+        let by_name: Vec<&str> = filter(&store, "prod", &mut matcher)
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(by_name, ["prod-db"]);
+
+        let by_host: Vec<&str> = filter(&store, "web.stg", &mut matcher)
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(by_host, ["staging-web"]);
+
+        let by_tag: Vec<&str> = filter(&store, "critical", &mut matcher)
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(by_tag, ["prod-db"]);
+    }
+
+    #[test]
+    fn matching_is_fuzzy_and_case_insensitive() {
+        let store = store_with(&[("Production Database", "db.example.com")]);
+        let mut matcher = Matcher::new(Config::DEFAULT);
+        assert_eq!(filter(&store, "proddb", &mut matcher).len(), 1);
+        assert_eq!(filter(&store, "PRODUCTION", &mut matcher).len(), 1);
+    }
+
+    #[test]
+    fn a_query_that_matches_nothing_returns_nothing() {
+        let store = store_with(&[("web", "w.example")]);
+        let mut matcher = Matcher::new(Config::DEFAULT);
+        assert!(filter(&store, "zzzzqqq", &mut matcher).is_empty());
+    }
+
+    #[test]
+    fn humanize_since_uses_coarse_units() {
+        let now = chrono::Utc::now();
+        assert_eq!(humanize_since(now), "just now");
+        assert_eq!(humanize_since(now - ChronoDuration::minutes(5)), "5m ago");
+        assert_eq!(humanize_since(now - ChronoDuration::hours(3)), "3h ago");
+        assert_eq!(humanize_since(now - ChronoDuration::days(2)), "2d ago");
+        assert_eq!(humanize_since(now - ChronoDuration::days(90)), "3mo ago");
+        assert_eq!(humanize_since(now - ChronoDuration::days(800)), "2y ago");
+        // A clock that jumped backwards must not render a negative age.
+        assert_eq!(humanize_since(now + ChronoDuration::hours(1)), "just now");
+    }
+
+    #[test]
+    fn truncate_keeps_short_strings_and_ellipsises_long_ones() {
+        assert_eq!(truncate("short", 10), "short");
+        assert_eq!(truncate("abcdefghij", 10), "abcdefghij");
+        assert_eq!(truncate("abcdefghijk", 10), "abcdefghi…");
+    }
+
+    #[test]
+    fn centered_rect_fits_inside_a_small_area() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 3,
+        };
+        let r = centered_rect(area, 60, 5);
+        assert!(r.width <= area.width && r.height <= area.height);
+        assert!(r.x + r.width <= area.x + area.width);
+        assert!(r.y + r.height <= area.y + area.height);
+    }
+}
