@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use crate::model::{Connection, Store};
 use crate::store::StoreFile;
-use crate::{cli, ssh};
+use crate::{cli, herdr, ssh};
 
 /// Restores the terminal on the way out, including while a panic unwinds.
 struct TerminalGuard {
@@ -88,10 +88,66 @@ pub fn run() -> Result<()> {
             if let Some(warning) = warning {
                 eprintln!("herdr-ssh-manager: {warning}");
             }
-            ssh::connect(&conn)?;
+            connect_somewhere(&conn)
+        }
+    }
+}
+
+/// Put the SSH session where the user can keep it.
+///
+/// Under Herdr that means handing it to a real pane — the one the popup was opened
+/// from, or a fresh tab when that pane is busy — because a popup is modal and dies
+/// with its process. Outside Herdr there is nowhere to hand it to, so this process
+/// becomes the session instead.
+fn connect_somewhere(conn: &Connection) -> Result<()> {
+    let Some(ctx) = herdr::Context::from_env() else {
+        ssh::connect(conn)?;
+        unreachable!("exec replaces the process")
+    };
+
+    match hand_off(&ctx, conn) {
+        Ok(Placement::ReusedPane) => Ok(()),
+        Ok(Placement::NewTab) => Ok(()),
+        Err(e) => {
+            // Rather than dead-end, fall back to the popup and say why.
+            eprintln!("herdr-ssh-manager: could not open the session in a pane ({e:#}).");
+            eprintln!("herdr-ssh-manager: connecting here instead.\n");
+            ssh::connect(conn)?;
             unreachable!("exec replaces the process")
         }
     }
+}
+
+enum Placement {
+    ReusedPane,
+    NewTab,
+}
+
+/// Ask Herdr to run ssh in a pane, reusing the focused one when it is idle.
+fn hand_off(ctx: &herdr::Context, conn: &Connection) -> Result<Placement> {
+    let program = ssh::find_ssh()?;
+    let args = ssh::build_args(conn)?;
+    // Herdr types what it is given straight into the shell without quoting, so the
+    // command has to arrive already safe.
+    let command = herdr::quote_command(&program.to_string_lossy(), &args);
+
+    // An unreadable or missing pane counts as busy: better a spare tab than a
+    // command typed over something that matters.
+    let reusable = ctx
+        .focused_pane_id
+        .as_deref()
+        .filter(|pane| herdr::pane_is_free(pane).unwrap_or(false));
+
+    if let Some(pane) = reusable {
+        herdr::pane_run(pane, &command)?;
+        // No focus call needed: this is the pane the popup was opened from, so
+        // closing the popup lands the user right on it.
+        return Ok(Placement::ReusedPane);
+    }
+
+    let pane = herdr::create_tab(ctx.workspace_id.as_deref(), &conn.name)?;
+    herdr::pane_run(&pane, &command)?;
+    Ok(Placement::NewTab)
 }
 
 fn event_loop(

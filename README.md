@@ -2,9 +2,18 @@
 
 A saved-connection manager for SSH, as a [Herdr](https://herdr.dev) plugin.
 
-Save the hosts you actually use, fuzzy-find them in a modal popup, and hit Enter. The popup
-*becomes* the SSH session — the picker `exec`s into `ssh`, so there is no wrapper process
-sitting between you and the connection, and the popup closes when the session ends.
+Save the hosts you actually use, fuzzy-find them in a modal popup, and hit Enter.
+
+The session does not stay in the popup. A popup is session-modal and dies with its process,
+which is the wrong home for an SSH connection you want to keep — so Enter hands `ssh` to a
+real pane instead:
+
+- **the pane you opened the picker from**, when its shell is sitting idle, or
+- **a new tab**, named after the connection, when that pane is busy running something.
+
+"Busy" is decided by asking Herdr whether the pane's shell still owns its foreground process
+group, so an agent, an editor or a running build all count — the picker will not type over
+work in progress.
 
 ```
   > prod
@@ -52,7 +61,7 @@ Both also show up wherever Herdr lists plugin actions.
 | any printable character | filter (fuzzy, matches name, user, host, port and tags) |
 | `Backspace` | delete a character from the filter |
 | `↑` `↓` / `Ctrl-P` `Ctrl-N` | move the selection |
-| `Enter` | connect — hands the popup over to `ssh` |
+| `Enter` | connect — runs `ssh` in your current pane, or a new tab if it is busy |
 | `Ctrl-A` | add a connection without leaving the picker |
 | `Ctrl-D` | delete the selected connection (asks first) |
 | `Esc` | clear the filter; on an empty filter, close |
@@ -137,6 +146,15 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 -J bastion.example.com -o ServerAliveInterval=3
 
 The destination always comes last, so a stray flag in `extra_ssh_args` cannot swallow it,
 and hosts starting with `-` are rejected.
+
+## Outside Herdr
+
+Run anywhere else — a plain terminal, an SSH session, a `cargo run` — `pick` and `connect`
+have no pane to hand the session to, so the process `exec`s into `ssh` and *becomes* the
+connection. Same for `herdr-ssh-manager connect <id>`, which always connects in place.
+
+If handing off to a pane fails for any reason, the picker says why and connects in place
+rather than leaving you with nothing.
 
 ## Windows
 

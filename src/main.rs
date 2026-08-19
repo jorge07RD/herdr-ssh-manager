@@ -2,6 +2,7 @@
 
 mod cli;
 mod config;
+mod herdr;
 mod import;
 mod model;
 mod picker;
