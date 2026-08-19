@@ -31,11 +31,16 @@ Herdr plugin manifests cannot declare keybindings, so add one to **your own** He
 
 ```toml
 [[keys.command]]
-key = "prefix+s"
+key = "prefix+shift+s"
 type = "plugin_action"
 command = "herdr-ssh-manager.open-picker"
 description = "SSH connections"
 ```
+
+Pick whatever key you like, but note that Herdr's own defaults already take `prefix` plus
+`s q o w g c p n e h j k l v x z r b tab minus 1..9` and `shift` plus `R N G W D T X P`
+(`prefix+s` in particular opens Herdr's settings). `prefix+shift+s` is free and keeps the
+mnemonic.
 
 There is a second action, `herdr-ssh-manager.open-add`, that opens the add form directly.
 Both also show up wherever Herdr lists plugin actions.
