@@ -140,6 +140,12 @@ fn hand_off(ctx: &herdr::Context, conn: &Connection) -> Result<Placement> {
 
     if let Some(pane) = reusable {
         herdr::pane_run(pane, &command)?;
+        // Name the tab after the connection, the same way a freshly created one is
+        // named. Non-fatal: a session that runs is worth more than its label, and
+        // there is no way to restore the automatic title afterwards anyway.
+        if let Some(tab) = ctx.tab_id.as_deref() {
+            let _ = herdr::rename_tab(tab, &conn.name);
+        }
         // No focus call needed: this is the pane the popup was opened from, so
         // closing the popup lands the user right on it.
         return Ok(Placement::ReusedPane);

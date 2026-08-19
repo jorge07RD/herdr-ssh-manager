@@ -9,7 +9,11 @@ which is the wrong home for an SSH connection you want to keep — so Enter hand
 real pane instead:
 
 - **the pane you opened the picker from**, when its shell is sitting idle, or
-- **a new tab**, named after the connection, when that pane is busy running something.
+- **a new tab**, when that pane is busy running something.
+
+Either way the tab takes the connection's name, so a row of tabs reads as the hosts you
+are on. The name stays after you disconnect — Herdr's `tab rename` has no way to restore
+the automatic title — so rename it back yourself if you want the number.
 
 "Busy" is decided by asking Herdr whether the pane's shell still owns its foreground process
 group, so an agent, an editor or a running build all count — the picker will not type over

@@ -14,6 +14,8 @@ use std::process::Command;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Context {
     pub workspace_id: Option<String>,
+    /// The tab holding the focused pane.
+    pub tab_id: Option<String>,
     /// The pane that was focused when the popup opened — where the user "is".
     pub focused_pane_id: Option<String>,
 }
@@ -119,6 +121,14 @@ pub fn create_tab(workspace_id: Option<&str>, label: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("herdr created a tab but reported no root pane"))
 }
 
+/// Give a tab a new label.
+///
+/// Note there is no way to clear it back to the automatic title: unlike `pane rename`,
+/// `tab rename` takes a label and nothing else.
+pub fn rename_tab(tab_id: &str, label: &str) -> Result<()> {
+    call(&["tab", "rename", tab_id, label]).map(|_| ())
+}
+
 /// Type a command line into a pane's shell and run it.
 ///
 /// Note that Herdr joins the argv it is given with plain spaces and feeds the result
@@ -218,6 +228,7 @@ mod tests {
                       "invocation_source":"api"}"#;
         let ctx: Context = serde_json::from_str(raw).unwrap();
         assert_eq!(ctx.workspace_id.as_deref(), Some("w1"));
+        assert_eq!(ctx.tab_id.as_deref(), Some("w1:t1"));
         assert_eq!(ctx.focused_pane_id.as_deref(), Some("w1:p1"));
     }
 
@@ -225,5 +236,6 @@ mod tests {
     fn a_context_without_a_focused_pane_still_parses() {
         let ctx: Context = serde_json::from_str(r#"{"workspace_id":"w1"}"#).unwrap();
         assert_eq!(ctx.focused_pane_id, None);
+        assert_eq!(ctx.tab_id, None);
     }
 }
