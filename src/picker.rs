@@ -455,12 +455,12 @@ fn row(conn: &Connection) -> Line<'static> {
             Style::new().fg(Color::Cyan),
         ),
     ];
-    if !conn.tags.is_empty() {
-        spans.push(Span::styled(
-            format!("{}  ", conn.tags.join(",")),
-            Style::new().fg(Color::Magenta),
-        ));
-    }
+    // The tag column is padded even when empty, so the timestamps after it line up
+    // instead of drifting with each row's tag list.
+    spans.push(Span::styled(
+        format!("{:<14}", truncate(&conn.tags.join(","), 14)),
+        Style::new().fg(Color::Magenta),
+    ));
     if let Some(ts) = conn.last_connected_at {
         spans.push(Span::styled(
             humanize_since(ts),

@@ -15,14 +15,7 @@ real pane instead:
 group, so an agent, an editor or a running build all count — the picker will not type over
 work in progress.
 
-```
-  > prod
-  ▌ Prod DB           deploy@db.example.com:2222    prod,db      2h ago
-    Web 01            deploy@web01.example.com      prod,web     3d ago
-    Staging           root@staging.internal         staging      never
-
-  ↑↓ move   enter connect   ^A add   ^D delete   esc close   3 saved
-```
+![The SSH Manager picker, listing saved connections](docs/picker.png)
 
 ## Install
 
@@ -69,6 +62,10 @@ Both also show up wherever Herdr lists plugin actions.
 
 Every printable key goes to the filter, fzf-style, which is why add and delete sit on
 control chords rather than on `a` and `d`.
+
+![Typing narrows the list to matching connections](docs/picker-filter.png)
+
+The filter is fuzzy, so `pdb` finds `Prod DB` and `w01` finds `web01.example.com`.
 
 ## Command line
 
