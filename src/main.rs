@@ -52,6 +52,44 @@ mod tests {
     /// The plugin manifest carries its own `version`, and Herdr shows *that* one while the
     /// binary reports Cargo's. Bumping one and forgetting the other ships a release whose
     /// advertised version does not match what it installs, which nothing else would catch.
+    /// Herdr reports the plugin root as a `\\?\` verbatim path, which the Windows launchers
+    /// have to strip. Getting that expression subtly wrong is invisible: `StartsWith('\?')`
+    /// is valid PowerShell and parses cleanly, so neither CI's syntax check nor anything
+    /// running on Linux would notice. It simply stops stripping — and only on the fallback
+    /// path, so it survives a successful install. This caught exactly that in 0.7.0.
+    #[test]
+    fn every_windows_launcher_strips_the_verbatim_prefix_the_same_way() {
+        const STRIP: &str = r#"if($p.StartsWith('\\?\')){$p=$p.Substring(4)}"#;
+        let manifest: toml::Value = toml::from_str(include_str!("../herdr-plugin.toml"))
+            .expect("herdr-plugin.toml does not parse");
+
+        let mut checked = 0;
+        for section in ["panes", "actions"] {
+            for item in manifest[section].as_array().expect("array of tables") {
+                let windows = item
+                    .get("platforms")
+                    .and_then(|p| p.as_array())
+                    .is_some_and(|p| p.iter().any(|v| v.as_str() == Some("windows")));
+                let command = item["command"].as_array().expect("command array");
+                let last = command.last().and_then(|v| v.as_str()).unwrap_or_default();
+                // Only the launchers that resolve the plugin root have to strip it.
+                if !windows || !last.contains("HERDR_PLUGIN_ROOT") {
+                    continue;
+                }
+                let id = item["id"].as_str().unwrap_or("?");
+                assert!(
+                    last.contains(STRIP),
+                    "{id} does not strip the verbatim prefix the same way as the others"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 4,
+            "expected several Windows launchers, saw {checked}"
+        );
+    }
+
     #[test]
     fn cargo_and_plugin_manifest_versions_agree() {
         let manifest = include_str!("../herdr-plugin.toml");
