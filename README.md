@@ -57,8 +57,8 @@ Herdr plugin manifests cannot declare keybindings, so the binding lives in **you
 config. To (re)write it, or after opting out with `SSHM_NO_KEYBIND=1`:
 
 ```sh
-herdr plugin action invoke setup --plugin herdr-ssh-manager           # Linux, macOS
-herdr plugin action invoke setup-windows --plugin herdr-ssh-manager   # Windows
+herdr plugin action invoke herdr-ssh-manager.setup           # Linux, macOS
+herdr plugin action invoke herdr-ssh-manager.setup-windows   # Windows
 ```
 
 That creates the config if it does not exist yet, picks the action id that works on your
@@ -71,6 +71,14 @@ herdr-ssh-manager setup --key prefix+shift+h
 herdr-ssh-manager setup --dry-run     # show the block without writing
 ```
 
+Pick whatever key you like, but note that Herdr's own defaults already take `prefix` plus
+`s q o w g c p n e h j k l v x z r b tab minus 1..9` and `shift` plus `R N G W D T X P`
+(`prefix+s` in particular opens Herdr's settings). `prefix+shift+s` is free and keeps the
+mnemonic. The prefix itself is `ctrl+b`.
+
+There is a second action, `herdr-ssh-manager.open-add`, that opens the add form directly.
+Both also show up wherever Herdr lists plugin actions.
+
 ### Removing it again
 
 Herdr has no uninstall hook — the manifest declares `build`, `startup`, `actions`, `events`,
@@ -79,24 +87,16 @@ cannot clean up after itself: the keybinding would stay behind, pointing at an a
 longer exists. Remove it first, in the same line:
 
 ```sh
-herdr plugin action invoke unbind --plugin herdr-ssh-manager && herdr plugin uninstall herdr-ssh-manager
+herdr plugin action invoke herdr-ssh-manager.unbind && herdr plugin uninstall herdr-ssh-manager
 ```
 
 ```powershell
-herdr plugin action invoke unbind-windows --plugin herdr-ssh-manager; herdr plugin uninstall herdr-ssh-manager
+herdr plugin action invoke herdr-ssh-manager.unbind-windows; herdr plugin uninstall herdr-ssh-manager
 ```
 
 `unbind` removes only blocks bound to this plugin — along with the comments written directly
 above them, which would otherwise be stranded describing whatever table came next — backs the
 file up first, and leaves everything else byte for byte.
-
-Pick whatever key you like, but note that Herdr's own defaults already take `prefix` plus
-`s q o w g c p n e h j k l v x z r b tab minus 1..9` and `shift` plus `R N G W D T X P`
-(`prefix+s` in particular opens Herdr's settings). `prefix+shift+s` is free and keeps the
-mnemonic. The prefix itself is `ctrl+b`.
-
-There is a second action, `herdr-ssh-manager.open-add`, that opens the add form directly.
-Both also show up wherever Herdr lists plugin actions.
 
 ## Picker keys
 
@@ -239,7 +239,9 @@ rather than leaving you with nothing.
 
 ## Windows
 
-On Windows the action ids are **different**, and this is the single easiest thing to get wrong.
+Installing handles all of this. Read on only if you are editing the config by hand.
+
+The action ids on Windows are **different**, and this is the single easiest thing to get wrong.
 Herdr rejects duplicate action ids even when they are platform-gated — a duplicate takes the
 whole manifest offline — so the Windows entries are suffixed:
 
@@ -252,8 +254,8 @@ description = "SSH connections"
 ```
 
 Your config lives at `%APPDATA%\herdr\config.toml`, and it does not exist until something
-creates it. `herdr plugin action invoke setup-windows --plugin herdr-ssh-manager` handles all
-of that; the block above is only for doing it by hand.
+creates it. Write it with PowerShell's `Set-Content` or `-Encoding utf8` and you get UTF-16 or
+a BOM, either of which the TOML parser can choke on — one more reason to let `setup` do it.
 
 Why the split: Herdr hands a pane or action's *relative* program straight to `CreateProcessW`,
 which resolves it against Herdr's own directory rather than the plugin root, and never appends
