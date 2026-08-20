@@ -58,6 +58,38 @@ jobs:
       - name: hermetic tests
         run: sh scripts/tests/fetch-or-build.test.sh
 
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Error $_ }; $failed = $true }
+            else { Write-Host "$($_.Name) parses cleanly" }
+          }
+          if ($failed) { exit 1 }
+
+      # The Windows [[panes]]/[[actions]] carry PowerShell inline in the manifest, where
+      # nothing would otherwise catch a syntax error until a user pressed the keybinding
+      # and saw nothing happen. Parse those strings too.
+      - name: Inline manifest PowerShell parses
+        shell: pwsh
+        run: |
+          $manifest = Get-Content herdr-plugin.toml -Raw
+          $snippets = [regex]::Matches($manifest, "(?s)'''(.*?)'''")
+          if ($snippets.Count -eq 0) { Write-Error "no inline PowerShell found in the manifest"; exit 1 }
+          $failed = $false
+          foreach ($m in $snippets) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseInput(
+              $m.Groups[1].Value, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Error $_ }; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "$($snippets.Count) inline snippets parse cleanly"
+
   windows:
     # Windows is preview for this plugin: the popup panes cannot launch there (herdr resolves
     # the manifest's relative command against its own directory). The CLI does work, so it is
@@ -70,15 +102,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
-      - name: PowerShell build script parses
-        shell: pwsh
-        run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            "scripts/fetch-or-build.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
-          Write-Host "fetch-or-build.ps1 parses cleanly"
-
   audit:
     name: cargo-audit
     runs-on: ubuntu-latest

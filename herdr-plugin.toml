@@ -6,18 +6,27 @@
 # Notes verified against herdr 0.8.0:
 #  - Keybindings are NOT declared here. The manifest accepts only id, name, version,
 #    min_herdr_version, description, platforms, build, startup, actions, events, panes
-#    and link_handlers. Users bind `prefix+s` in their own herdr config.toml — see README.
+#    and link_handlers. Users bind `prefix+shift+s` in their own config.toml — see README.
 #  - `width`/`height` are only accepted when `placement = "popup"`.
 #  - `[[build]]` runs on `herdr plugin install`, never on `herdr plugin link`. For a local
 #    checkout, build it yourself with `cargo build --release`.
-#  - Pane/action commands are relative to the plugin root. On Windows herdr hands the
-#    relative program to CreateProcessW, which resolves it against herdr's own directory
-#    and does not append `.exe`, so the popup panes do not launch there. The CLI
-#    subcommands work fine on Windows — see the README's Windows section.
+#  - Item-level `platforms` overrides the top-level list, and is accepted on build, actions
+#    and panes alike. herdr runs only the entry matching the host.
+#
+# Windows (verified on real hardware, herdr 0.8.2):
+#  - herdr hands a RELATIVE pane/action program to CreateProcessW, which resolves it against
+#    herdr's OWN directory rather than the plugin root, and never appends `.exe`. So
+#    `./target/release/herdr-ssh-manager` cannot spawn there at all: the keybinding looks
+#    dead and no popup appears.
+#  - The Windows entries below therefore run `powershell` — which IS on PATH, so
+#    CreateProcessW finds it — and hand off to scripts/launch.ps1 by absolute path, after
+#    stripping the `\\?\` verbatim prefix herdr reports for the plugin root.
+#  - Their ids carry a `-windows` suffix because herdr rejects duplicate action/pane ids
+#    even when the duplicates are platform-gated. On Windows, bind `open-picker-windows`.
 
 id = "herdr-ssh-manager"
 name = "SSH Manager"
-version = "0.6.1"
+version = "0.7.0"
 min_herdr_version = "0.8.0"
 description = "Save and reconnect to SSH hosts from Herdr"
 platforms = ["linux", "macos", "windows"]
@@ -27,8 +36,6 @@ platforms = ["linux", "macos", "windows"]
 # no release for this version, an unpublished platform (Linux ARM), a network or checksum
 # failure — the script says why and builds from source with cargo instead, which is exactly
 # what installing did before prebuilts existed.
-#
-# herdr runs only the entry whose `platforms` matches the host.
 [[build]]
 platforms = ["linux", "macos"]
 command = ["/bin/sh", "scripts/fetch-or-build.sh"]
@@ -41,6 +48,7 @@ command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s
 # so the popup *becomes* the connection and closes when the session ends.
 [[panes]]
 id = "picker"
+platforms = ["linux", "macos"]
 title = "SSH Connections"
 placement = "popup"
 width = "70%"
@@ -49,23 +57,73 @@ command = ["./target/release/herdr-ssh-manager", "pick"]
 
 [[panes]]
 id = "add"
+platforms = ["linux", "macos"]
 title = "Add SSH Connection"
 placement = "popup"
 width = "70%"
 height = 18
 command = ["./target/release/herdr-ssh-manager", "add"]
 
+# Same two popups on Windows, reached through the PowerShell launcher (see header).
+[[panes]]
+id = "picker-windows"
+platforms = ["windows"]
+title = "SSH Connections"
+placement = "popup"
+width = "70%"
+height = 20
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$ErrorActionPreference='Stop'; $u=New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; $OutputEncoding=$u; $p=$env:HERDR_PLUGIN_ROOT; if(-not $p){$b=$env:HERDR_BIN_PATH; if(-not $b){$b='herdr'}; $p=((& $b plugin list --json|ConvertFrom-Json).result.plugins|Where-Object{$_.plugin_id -eq 'herdr-ssh-manager'}).plugin_root}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') pick''',
+]
+
+[[panes]]
+id = "add-windows"
+platforms = ["windows"]
+title = "Add SSH Connection"
+placement = "popup"
+width = "70%"
+height = 18
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$ErrorActionPreference='Stop'; $u=New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; $OutputEncoding=$u; $p=$env:HERDR_PLUGIN_ROOT; if(-not $p){$b=$env:HERDR_BIN_PATH; if(-not $b){$b='herdr'}; $p=((& $b plugin list --json|ConvertFrom-Json).result.plugins|Where-Object{$_.plugin_id -eq 'herdr-ssh-manager'}).plugin_root}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') add''',
+]
+
 # Actions open the popups above. They shell out to $HERDR_BIN_PATH from Rust rather
 # than through `sh -c`, so the launcher works the same on every platform and can report
 # a clear error when the variable is missing.
 [[actions]]
 id = "open-picker"
+platforms = ["linux", "macos"]
 title = "SSH: open connections"
 contexts = ["workspace", "global"]
 command = ["./target/release/herdr-ssh-manager", "open-picker"]
 
 [[actions]]
 id = "open-add"
+platforms = ["linux", "macos"]
 title = "SSH: add connection"
 contexts = ["workspace", "global"]
 command = ["./target/release/herdr-ssh-manager", "open-add"]
+
+# The Windows actions reach the same two subcommands through the launcher. The binary then
+# asks herdr for the `-windows` pane entrypoints, since it knows which host it is running on.
+[[actions]]
+id = "open-picker-windows"
+platforms = ["windows"]
+title = "SSH: open connections"
+contexts = ["workspace", "global"]
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$ErrorActionPreference='Stop'; $u=New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; $OutputEncoding=$u; $p=$env:HERDR_PLUGIN_ROOT; if(-not $p){$b=$env:HERDR_BIN_PATH; if(-not $b){$b='herdr'}; $p=((& $b plugin list --json|ConvertFrom-Json).result.plugins|Where-Object{$_.plugin_id -eq 'herdr-ssh-manager'}).plugin_root}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') open-picker''',
+]
+
+[[actions]]
+id = "open-add-windows"
+platforms = ["windows"]
+title = "SSH: add connection"
+contexts = ["workspace", "global"]
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$ErrorActionPreference='Stop'; $u=New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; $OutputEncoding=$u; $p=$env:HERDR_PLUGIN_ROOT; if(-not $p){$b=$env:HERDR_BIN_PATH; if(-not $b){$b='herdr'}; $p=((& $b plugin list --json|ConvertFrom-Json).result.plugins|Where-Object{$_.plugin_id -eq 'herdr-ssh-manager'}).plugin_root}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') open-add''',
+]

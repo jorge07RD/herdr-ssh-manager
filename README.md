@@ -206,15 +206,29 @@ rather than leaving you with nothing.
 
 ## Windows
 
-The CLI subcommands all work, and `herdr-ssh-manager pick` runs fine in a regular pane.
+Everything works, but **bind different action ids**. Herdr rejects duplicate action and pane
+ids even when they are platform-gated, so the Windows entries are suffixed:
 
-**The popup panes do not launch on Windows.** Herdr hands the manifest's relative command to
-`CreateProcessW`, which resolves it against Herdr's own directory rather than the plugin root
-and does not append `.exe`, so `open-picker` and `open-add` fail there. Windows also has no
-`execvp`, so `Enter` runs `ssh` as a child process and exits with its status instead of being
-replaced by it — the practical difference is one extra process in the tree.
+```toml
+[[keys.command]]
+key = "prefix+shift+s"
+type = "plugin_action"
+command = "herdr-ssh-manager.open-picker-windows"   # note the suffix
+description = "SSH connections"
+```
 
-Until that is addressed, on Windows run `herdr-ssh-manager pick` in a pane directly.
+Your config lives at `%APPDATA%\herdr\config.toml`.
+
+Why the split: Herdr hands a pane or action's *relative* program straight to `CreateProcessW`,
+which resolves it against Herdr's own directory rather than the plugin root, and never appends
+`.exe`. So `./target/release/herdr-ssh-manager` cannot spawn on Windows at all — before 0.7.0
+the keybinding simply did nothing. The Windows entries instead run `powershell`, which is on
+`PATH` and therefore does resolve, and it hands off to `scripts/launch.ps1` by absolute path.
+Invoking the wrong id for your platform is not silent: Herdr answers `platform_unsupported`.
+
+One real difference remains. Windows has no `execvp`, so `Enter` runs `ssh` as a child process
+and exits with its status instead of being replaced by it. The practical effect is one extra
+process in the tree.
 
 ## Local development
 
