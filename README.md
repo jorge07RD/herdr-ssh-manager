@@ -206,8 +206,8 @@ rather than leaving you with nothing.
 
 ## Windows
 
-Everything works, but **bind different action ids**. Herdr rejects duplicate action and pane
-ids even when they are platform-gated, so the Windows entries are suffixed:
+On Windows, **bind different action ids**. Herdr rejects duplicate action and pane ids even
+when they are platform-gated, so the Windows entries are suffixed:
 
 ```toml
 [[keys.command]]
@@ -223,8 +223,9 @@ Why the split: Herdr hands a pane or action's *relative* program straight to `Cr
 which resolves it against Herdr's own directory rather than the plugin root, and never appends
 `.exe`. So `./target/release/herdr-ssh-manager` cannot spawn on Windows at all — before 0.7.0
 the keybinding simply did nothing. The Windows entries instead run `powershell`, which is on
-`PATH` and therefore does resolve, and it hands off to `scripts/launch.ps1` by absolute path.
-Invoking the wrong id for your platform is not silent: Herdr answers `platform_unsupported`.
+`PATH` and therefore does resolve: the pane hands off to `scripts/launch.ps1` by absolute path,
+and the action asks Herdr to open that pane directly. Invoking the wrong id for your platform is
+not silent — Herdr answers `platform_unsupported`.
 
 One real difference remains. Windows has no `execvp`, so `Enter` runs `ssh` as a child process
 and exits with its status instead of being replaced by it. The practical effect is one extra
