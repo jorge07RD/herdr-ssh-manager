@@ -20,13 +20,30 @@ $cargoToml = if ($env:SSHM_CARGO_TOML) { $env:SSHM_CARGO_TOML } else { Join-Path
 $out       = if ($env:SSHM_OUT)        { $env:SSHM_OUT }        else { Join-Path $repoRoot 'target\release\herdr-ssh-manager.exe' }
 $baseUrl   = if ($env:SSHM_BASE_URL)   { $env:SSHM_BASE_URL }   else { "https://github.com/$repo/releases/download" }
 
+# Put the picker on a key as part of installing, so `herdr plugin install` is the only command
+# anyone needs. Safe to do unasked: `setup` is a no-op when the binding already exists and
+# refuses a key bound to anything else rather than taking it. Opt out with SSHM_NO_KEYBIND=1,
+# and undo it any time with `herdr plugin action invoke unbind-windows`.
+function Add-Keybinding {
+    if ($env:SSHM_NO_KEYBIND) { return }
+    if (-not (Test-Path -LiteralPath $out)) { return }
+    # A keybinding that cannot be written must never fail the install; the binary is the
+    # part that matters, and `setup` prints its own explanation.
+    try { & $out setup } catch { Write-Host "$bin`: could not add the keybinding automatically." }
+}
+
 function Build-FromSource {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         Write-Error "$bin`: needs Rust 1.88+ to build from source, but cargo was not found. Install Rust from https://rustup.rs and re-run: herdr plugin install $repo"
         exit 1
     }
     Push-Location $repoRoot
-    try { & cargo build --release; exit $LASTEXITCODE } finally { Pop-Location }
+    try {
+        & cargo build --release
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } finally { Pop-Location }
+    Add-Keybinding
+    exit 0
 }
 
 function Fallback([string]$reason) {
@@ -76,4 +93,5 @@ New-Item -ItemType Directory -Path (Split-Path -Parent $out) -Force | Out-Null
 Move-Item -Force $tmpBin $out
 Remove-Item -Recurse -Force $tmpdir
 Write-Host "$bin`: installed prebuilt v$version ($triple), SHA-256 verified."
+Add-Keybinding
 exit 0

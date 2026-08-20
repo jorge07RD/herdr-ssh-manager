@@ -27,9 +27,14 @@ work in progress.
 herdr plugin install jorge07RD/herdr-ssh-manager
 ```
 
-Requires Herdr **0.8.0** or newer. **No Rust toolchain needed** on the platforms below:
-installing downloads the prebuilt binary for this release and verifies its SHA-256 before
-putting it in place.
+That is the whole installation. It downloads the prebuilt binary for this release, verifies
+its SHA-256, and puts the picker on `prefix+shift+s` — `Ctrl-B` then `Shift-S`.
+
+Requires Herdr **0.8.0** or newer. **No Rust toolchain needed** on the platforms below.
+
+Adding the keybinding is a courtesy, not a takeover: it is skipped if that key is already
+bound to anything else, and doing it twice changes nothing. Set `SSHM_NO_KEYBIND=1` to skip it,
+or see below for a different key.
 
 | Platform | Prebuilt |
 | --- | --- |
@@ -46,8 +51,10 @@ much faster.
 
 ## Keybinding
 
-Herdr plugin manifests cannot declare keybindings, so the picker needs one line in **your own**
-Herdr config. Let the plugin write it:
+Installing binds `prefix+shift+s` for you. Everything below is for changing that.
+
+Herdr plugin manifests cannot declare keybindings, so the binding lives in **your own** Herdr
+config. To (re)write it, or after opting out with `SSHM_NO_KEYBIND=1`:
 
 ```sh
 herdr plugin action invoke setup --plugin herdr-ssh-manager           # Linux, macOS
@@ -56,8 +63,8 @@ herdr plugin action invoke setup-windows --plugin herdr-ssh-manager   # Windows
 
 That creates the config if it does not exist yet, picks the action id that works on your
 platform, writes UTF-8 without a BOM, backs up any existing config first, and reloads Herdr so
-the key works immediately. Running it twice changes nothing. If the key is already taken it
-says so instead of stealing it — pick another with `--key`:
+the key works immediately. If the key is already taken it says so instead of stealing it — pick
+another with `--key`:
 
 ```sh
 herdr-ssh-manager setup --key prefix+shift+h
@@ -67,34 +74,26 @@ herdr-ssh-manager setup --dry-run     # show the block without writing
 ### Removing it again
 
 Herdr has no uninstall hook — the manifest declares `build`, `startup`, `actions`, `events`,
-`panes` and `link_handlers`, and nothing runs when a plugin is removed. So uninstalling leaves
-your keybinding behind, pointing at an action that no longer exists. Take it out **before**
-uninstalling, while the binary is still there:
+`panes` and `link_handlers`, and **nothing runs when a plugin is removed**. So uninstalling
+cannot clean up after itself: the keybinding would stay behind, pointing at an action that no
+longer exists. Remove it first, in the same line:
 
 ```sh
-herdr plugin action invoke unbind --plugin herdr-ssh-manager           # Linux, macOS
-herdr plugin action invoke unbind-windows --plugin herdr-ssh-manager   # Windows
+herdr plugin action invoke unbind --plugin herdr-ssh-manager && herdr plugin uninstall herdr-ssh-manager
 ```
 
-That removes only blocks bound to this plugin, backs the file up first, and leaves everything
-else byte for byte. Afterwards the file is identical to what it was before `setup` ran.
-
-To do it by hand, add this to `~/.config/herdr/config.toml` (`%APPDATA%\herdr\config.toml` on
-Windows) — and see the Windows section below before you copy it, because **the action id is
-different there**:
-
-```toml
-[[keys.command]]
-key = "prefix+shift+s"
-type = "plugin_action"
-command = "herdr-ssh-manager.open-picker"
-description = "SSH connections"
+```powershell
+herdr plugin action invoke unbind-windows --plugin herdr-ssh-manager; herdr plugin uninstall herdr-ssh-manager
 ```
+
+`unbind` removes only blocks bound to this plugin — along with the comments written directly
+above them, which would otherwise be stranded describing whatever table came next — backs the
+file up first, and leaves everything else byte for byte.
 
 Pick whatever key you like, but note that Herdr's own defaults already take `prefix` plus
 `s q o w g c p n e h j k l v x z r b tab minus 1..9` and `shift` plus `R N G W D T X P`
 (`prefix+s` in particular opens Herdr's settings). `prefix+shift+s` is free and keeps the
-mnemonic. The prefix itself is `ctrl+b`, so the default binding is `Ctrl-B` then `Shift-S`.
+mnemonic. The prefix itself is `ctrl+b`.
 
 There is a second action, `herdr-ssh-manager.open-add`, that opens the add form directly.
 Both also show up wherever Herdr lists plugin actions.
