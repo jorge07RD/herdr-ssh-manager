@@ -25,8 +25,9 @@ jobs:
             triple: x86_64-apple-darwin
           - os: ubuntu-latest
             triple: x86_64-unknown-linux-musl
-          # Windows is preview: the CLI works, the popup panes do not. Shipping the binary
-          # anyway is what makes the CLI usable there without a toolchain.
+          # Windows has no linker by default (no `link.exe` without the Visual Studio Build
+          # Tools), so the from-source fallback is not a realistic path there. The prebuilt
+          # binary is what makes the plugin installable on Windows at all.
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
@@ -113,7 +114,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A hyphen means a prerelease (v0.7.0-rc1): publish it, but do not let it take
+          # "latest" from the stable release people actually install.
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease=--prerelease ;;
+            *)   prerelease= ;;
+          esac
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-                 --title "$GITHUB_REF_NAME" --generate-notes
+                 --title "$GITHUB_REF_NAME" --generate-notes $prerelease
           gh release upload "$GITHUB_REF_NAME" release/* --clobber --repo "$GITHUB_REPOSITORY"

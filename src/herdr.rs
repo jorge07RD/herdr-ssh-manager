@@ -35,6 +35,18 @@ fn bin_path() -> Result<String> {
         .ok_or_else(|| anyhow!("HERDR_BIN_PATH is not set"))
 }
 
+/// Ask the running Herdr server to re-read config.toml, so a freshly written keybinding
+/// works without restarting the session.
+pub fn reload_config() -> Result<()> {
+    call(&["server", "reload-config"]).map(|_| ())
+}
+
+/// Surface a message to the user. Plugin actions have their stdout captured into the
+/// plugin log, where nobody looks, so anything the user actually needs to see goes here.
+pub fn notify(title: &str, body: &str) -> Result<()> {
+    call(&["notification", "show", title, "--body", body]).map(|_| ())
+}
+
 /// Run a `herdr` subcommand and return its `result` object.
 ///
 /// Herdr's CLI is not uniform here: query commands answer with a JSON envelope, while

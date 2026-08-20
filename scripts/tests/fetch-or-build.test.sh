@@ -41,7 +41,12 @@ setup() { # setup <uname-machine> [--no-download-tool]
     sandbox=$(mktemp -d)
     mkdir -p "$sandbox/bin" "$sandbox/release/v1.2.3" "$sandbox/repo"
     printf 'version = "1.2.3"\n' > "$sandbox/repo/Cargo.toml"
-    printf 'REAL-BINARY-CONTENT\n' > "$sandbox/release/v1.2.3/herdr-ssh-manager-x86_64-unknown-linux-musl"
+    # An executable stub rather than opaque bytes: the install script runs the binary it
+    # just installed (to add the keybinding), and that call has to be observable.
+    cat > "$sandbox/release/v1.2.3/herdr-ssh-manager-x86_64-unknown-linux-musl" <<'EOF'
+#!/bin/sh
+echo "STUB-BINARY-RAN $*"
+EOF
 
     cat > "$sandbox/bin/uname" <<EOF
 #!/bin/sh
@@ -85,13 +90,15 @@ EOF
 
 teardown() { rm -rf "$sandbox"; }
 
-run_script() {
+run_script() { # run_script [EXTRA=env ...]
     env PATH="$sandbox/bin:/usr/bin:/bin" \
+        XDG_CONFIG_HOME="$sandbox/xdg" \
         SSHM_REPO_ROOT="$sandbox/repo" \
         SSHM_CARGO_TOML="$sandbox/repo/Cargo.toml" \
         SSHM_OUT="$sandbox/repo/target/release/herdr-ssh-manager" \
         SSHM_BASE_URL="file://$sandbox/release" \
         HOME="$sandbox" \
+        "$@" \
         sh "$script" 2>&1
 }
 
@@ -111,6 +118,7 @@ sums_for "$(real_digest)"
 out=$(run_script)
 check "installs the verified prebuilt" "SHA-256 verified" "$out"
 check_absent "does not build from source" "STUB-CARGO-RAN" "$out"
+check "installing also binds the key" "STUB-BINARY-RAN setup" "$out"
 [ -f "$sandbox/cargo-ran" ] && { echo "  FAIL cargo ran on the happy path"; fail=$((fail + 1)); } \
                            || { echo "  ok   cargo did not run"; pass=$((pass + 1)); }
 if [ -x "$sandbox/repo/target/release/herdr-ssh-manager" ]; then
@@ -175,6 +183,31 @@ printf '%s *herdr-ssh-manager-x86_64-unknown-linux-musl\n' "$(real_digest)" \
     > "$sandbox/release/v1.2.3/SHA256SUMS"
 out=$(run_script)
 check "binary-mode checksum line verifies" "SHA-256 verified" "$out"
+teardown
+
+# 9. The keybinding is a courtesy, not a requirement: it must be refusable.
+setup x86_64
+sums_for "$(real_digest)"
+out=$(run_script SSHM_NO_KEYBIND=1)
+check "still installs with the keybinding opted out" "SHA-256 verified" "$out"
+check_absent "  and does not touch the keybinding" "STUB-BINARY-RAN setup" "$out"
+teardown
+
+# 10. A failed keybinding must never fail the install — the binary is what matters.
+setup x86_64
+cat > "$sandbox/release/v1.2.3/herdr-ssh-manager-x86_64-unknown-linux-musl" <<'EOF'
+#!/bin/sh
+echo "STUB-BINARY-RAN $*" >&2
+exit 1
+EOF
+sums_for "$(real_digest)"
+out=$(run_script); status=$?
+check "reports the install even when binding fails" "SHA-256 verified" "$out"
+if [ "$status" -eq 0 ]; then
+    echo "  ok   install still succeeds"; pass=$((pass + 1))
+else
+    echo "  FAIL install failed because of the keybinding (exit $status)"; fail=$((fail + 1))
+fi
 teardown
 
 echo

@@ -6,6 +6,7 @@ mod herdr;
 mod import;
 mod model;
 mod picker;
+mod setup;
 mod ssh;
 mod store;
 
@@ -35,6 +36,7 @@ fn run() -> anyhow::Result<()> {
         Command::Pick => picker::run(),
         Command::Connect(args) => cli::connect(args),
         Command::Where => cli::where_cmd(),
+        Command::Setup(args) => setup::run(args),
         Command::OpenPicker => cli::open_pane("picker"),
         Command::OpenAdd => cli::open_pane("add"),
     }

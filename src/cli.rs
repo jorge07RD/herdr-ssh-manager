@@ -38,6 +38,8 @@ pub enum Command {
     Connect(ConnectArgs),
     /// Print where connections.toml lives
     Where,
+    /// Bind the picker to a key in your own Herdr config
+    Setup(crate::setup::SetupArgs),
     /// Ask Herdr to open the picker popup (bound to the open-picker action)
     #[command(hide = true)]
     OpenPicker,
@@ -787,7 +789,21 @@ pub fn where_cmd() -> Result<()> {
 // ---------------------------------------------------------------- popup launchers
 
 /// Ask Herdr to open one of the popup panes declared in herdr-plugin.toml.
-pub fn open_pane(entrypoint: &str) -> Result<()> {
+/// The manifest pane id to ask Herdr for on this host.
+///
+/// Windows needs its own `[[panes]]` entries — Herdr cannot spawn the relative command the
+/// unix panes carry — and Herdr rejects duplicate pane ids even when they are platform-gated,
+/// so those entries are suffixed rather than sharing a name.
+fn entrypoint_for_host(base: &str) -> String {
+    if cfg!(windows) {
+        format!("{base}-windows")
+    } else {
+        base.to_string()
+    }
+}
+
+pub fn open_pane(base: &str) -> Result<()> {
+    let entrypoint = entrypoint_for_host(base);
     let herdr = std::env::var("HERDR_BIN_PATH")
         .ok()
         .filter(|v| !v.is_empty())
@@ -803,7 +819,7 @@ pub fn open_pane(entrypoint: &str) -> Result<()> {
             "--plugin",
             "herdr-ssh-manager",
             "--entrypoint",
-            entrypoint,
+            entrypoint.as_str(),
             "--placement",
             "popup",
         ])
@@ -818,6 +834,18 @@ pub fn open_pane(entrypoint: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_asks_for_its_own_pane_entrypoints() {
+        // The suffixed ids are not cosmetic: the unix panes carry a relative command that
+        // Windows cannot spawn, so the two platforms genuinely need separate manifest entries.
+        let expected = if cfg!(windows) {
+            "picker-windows"
+        } else {
+            "picker"
+        };
+        assert_eq!(entrypoint_for_host("picker"), expected);
+    }
 
     #[test]
     fn from_flags_requires_a_non_empty_name_and_host() {

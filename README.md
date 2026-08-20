@@ -27,9 +27,14 @@ work in progress.
 herdr plugin install jorge07RD/herdr-ssh-manager
 ```
 
-Requires Herdr **0.8.0** or newer. **No Rust toolchain needed** on the platforms below:
-installing downloads the prebuilt binary for this release and verifies its SHA-256 before
-putting it in place.
+That is the whole installation. It downloads the prebuilt binary for this release, verifies
+its SHA-256, and puts the picker on `prefix+shift+s` — `Ctrl-B` then `Shift-S`.
+
+Requires Herdr **0.8.0** or newer. **No Rust toolchain needed** on the platforms below.
+
+Adding the keybinding is a courtesy, not a takeover: it is skipped if that key is already
+bound to anything else, and doing it twice changes nothing. Set `SSHM_NO_KEYBIND=1` to skip it,
+or see below for a different key.
 
 | Platform | Prebuilt |
 | --- | --- |
@@ -46,24 +51,52 @@ much faster.
 
 ## Keybinding
 
-Herdr plugin manifests cannot declare keybindings, so add one to **your own** Herdr config
-(`~/.config/herdr/config.toml`) to get the picker on a key:
+Installing binds `prefix+shift+s` for you. Everything below is for changing that.
 
-```toml
-[[keys.command]]
-key = "prefix+shift+s"
-type = "plugin_action"
-command = "herdr-ssh-manager.open-picker"
-description = "SSH connections"
+Herdr plugin manifests cannot declare keybindings, so the binding lives in **your own** Herdr
+config. To (re)write it, or after opting out with `SSHM_NO_KEYBIND=1`:
+
+```sh
+herdr plugin action invoke herdr-ssh-manager.setup           # Linux, macOS
+herdr plugin action invoke herdr-ssh-manager.setup-windows   # Windows
+```
+
+That creates the config if it does not exist yet, picks the action id that works on your
+platform, writes UTF-8 without a BOM, backs up any existing config first, and reloads Herdr so
+the key works immediately. If the key is already taken it says so instead of stealing it — pick
+another with `--key`:
+
+```sh
+herdr-ssh-manager setup --key prefix+shift+h
+herdr-ssh-manager setup --dry-run     # show the block without writing
 ```
 
 Pick whatever key you like, but note that Herdr's own defaults already take `prefix` plus
 `s q o w g c p n e h j k l v x z r b tab minus 1..9` and `shift` plus `R N G W D T X P`
 (`prefix+s` in particular opens Herdr's settings). `prefix+shift+s` is free and keeps the
-mnemonic.
+mnemonic. The prefix itself is `ctrl+b`.
 
 There is a second action, `herdr-ssh-manager.open-add`, that opens the add form directly.
 Both also show up wherever Herdr lists plugin actions.
+
+### Removing it again
+
+Herdr has no uninstall hook — the manifest declares `build`, `startup`, `actions`, `events`,
+`panes` and `link_handlers`, and **nothing runs when a plugin is removed**. So uninstalling
+cannot clean up after itself: the keybinding would stay behind, pointing at an action that no
+longer exists. Remove it first, in the same line:
+
+```sh
+herdr plugin action invoke herdr-ssh-manager.unbind && herdr plugin uninstall herdr-ssh-manager
+```
+
+```powershell
+herdr plugin action invoke herdr-ssh-manager.unbind-windows; herdr plugin uninstall herdr-ssh-manager
+```
+
+`unbind` removes only blocks bound to this plugin — along with the comments written directly
+above them, which would otherwise be stranded describing whatever table came next — backs the
+file up first, and leaves everything else byte for byte.
 
 ## Picker keys
 
@@ -206,15 +239,35 @@ rather than leaving you with nothing.
 
 ## Windows
 
-The CLI subcommands all work, and `herdr-ssh-manager pick` runs fine in a regular pane.
+Installing handles all of this. Read on only if you are editing the config by hand.
 
-**The popup panes do not launch on Windows.** Herdr hands the manifest's relative command to
-`CreateProcessW`, which resolves it against Herdr's own directory rather than the plugin root
-and does not append `.exe`, so `open-picker` and `open-add` fail there. Windows also has no
-`execvp`, so `Enter` runs `ssh` as a child process and exits with its status instead of being
-replaced by it — the practical difference is one extra process in the tree.
+The action ids on Windows are **different**, and this is the single easiest thing to get wrong.
+Herdr rejects duplicate action ids even when they are platform-gated — a duplicate takes the
+whole manifest offline — so the Windows entries are suffixed:
 
-Until that is addressed, on Windows run `herdr-ssh-manager pick` in a pane directly.
+```toml
+[[keys.command]]
+key = "prefix+shift+s"
+type = "plugin_action"
+command = "herdr-ssh-manager.open-picker-windows"   # note the suffix
+description = "SSH connections"
+```
+
+Your config lives at `%APPDATA%\herdr\config.toml`, and it does not exist until something
+creates it. Write it with PowerShell's `Set-Content` or `-Encoding utf8` and you get UTF-16 or
+a BOM, either of which the TOML parser can choke on — one more reason to let `setup` do it.
+
+Why the split: Herdr hands a pane or action's *relative* program straight to `CreateProcessW`,
+which resolves it against Herdr's own directory rather than the plugin root, and never appends
+`.exe`. So `./target/release/herdr-ssh-manager` cannot spawn on Windows at all — before 0.7.0
+the keybinding simply did nothing. The Windows entries instead run `powershell`, which is on
+`PATH` and therefore does resolve: the pane hands off to `scripts/launch.ps1` by absolute path,
+and the action asks Herdr to open that pane directly. Invoking the wrong id for your platform is
+not silent — Herdr answers `platform_unsupported`.
+
+One real difference remains. Windows has no `execvp`, so `Enter` runs `ssh` as a child process
+and exits with its status instead of being replaced by it. The practical effect is one extra
+process in the tree.
 
 ## Local development
 

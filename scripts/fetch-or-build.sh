@@ -41,7 +41,20 @@ build_from_source() {
         exit 1
     fi
     cd "$repo_root" || exit 1
-    exec cargo build --release
+    # Not `exec`: the keybinding step below still has to run once the build succeeds.
+    cargo build --release || exit $?
+    bind_key
+    exit 0
+}
+
+# Put the picker on a key as part of installing, so `herdr plugin install` is the only command
+# anyone needs. This is safe to do unasked: `setup` is a no-op when the binding already exists,
+# and it refuses a key that is bound to anything else rather than taking it. Opt out with
+# SSHM_NO_KEYBIND=1, and undo it any time with `herdr plugin action invoke unbind`.
+bind_key() {
+    [ -z "${SSHM_NO_KEYBIND:-}" ] || return 0
+    [ -x "$out" ] || return 0
+    "$out" setup || true
 }
 
 fallback() {
@@ -117,4 +130,5 @@ chmod +x "$tmpdir/$asset"
 mkdir -p "$(dirname "$out")"
 mv -f "$tmpdir/$asset" "$out" || fallback "could not install the verified binary to $out"
 echo "$bin: installed prebuilt v$version ($triple), SHA-256 verified."
+bind_key
 exit 0
