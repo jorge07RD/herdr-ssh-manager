@@ -38,6 +38,12 @@ pub struct SetupArgs {
     /// Show what would change without writing anything
     #[arg(long)]
     pub dry_run: bool,
+    /// Take the binding back out again
+    ///
+    /// Herdr has no uninstall hook, so a plugin cannot clean up after itself — run this
+    /// before `herdr plugin uninstall`, while the binary still exists.
+    #[arg(long)]
+    pub remove: bool,
 }
 
 /// Herdr's own config file — not this plugin's. Deliberately separate from
@@ -143,6 +149,90 @@ pub fn plan(existing: &[Binding], key: &str) -> Plan {
     Plan::Append
 }
 
+/// Drop every `[[keys.command]]` block bound to this plugin, leaving the rest byte for byte.
+///
+/// Line-based on purpose: round-tripping through a TOML serialiser would reformat the whole
+/// file and throw away the user's comments.
+pub fn without_our_bindings(config: &str) -> (String, usize) {
+    let ends_with_newline = config.ends_with('\n');
+    let mut kept: Vec<&str> = Vec::new();
+    let mut removed = 0;
+    let lines: Vec<&str> = config.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim() != "[[keys.command]]" {
+            kept.push(lines[i]);
+            i += 1;
+            continue;
+        }
+        // Take the whole block: everything up to the next table header.
+        let start = i;
+        let mut end = i + 1;
+        while end < lines.len() && !lines[end].trim_start().starts_with('[') {
+            end += 1;
+        }
+        // Blank lines after the block separate it from what follows; they belong to the
+        // file, not to us. Leaving them in place is what keeps exactly one blank line
+        // between the neighbours once the block is gone.
+        while end > start + 1 && lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        let block = &lines[start..end];
+        if block
+            .iter()
+            .any(|l| l.contains("\"herdr-ssh-manager.") || l.contains("'herdr-ssh-manager."))
+        {
+            removed += 1;
+            // Comments glued to the block describe the block. Leaving them behind strands
+            // them above whatever table comes next, where they now appear to describe
+            // *that* — worse than removing them. A comment separated by a blank line is
+            // somebody else's and stays put.
+            while kept.last().is_some_and(|l| l.trim_start().starts_with('#')) {
+                kept.pop();
+            }
+            // Then the blank line that separated the stanza, so repeated add/remove cycles
+            // cannot pile up whitespace.
+            while kept.last().is_some_and(|l| l.trim().is_empty()) {
+                kept.pop();
+            }
+        } else {
+            kept.extend_from_slice(block);
+        }
+        i = end;
+    }
+    let mut out = kept.join("\n");
+    if ends_with_newline && !out.is_empty() {
+        out.push('\n');
+    }
+    (out, removed)
+}
+
+fn remove(args: &SetupArgs, path: &std::path::Path, existing: &str) -> Result<()> {
+    // Parse first: refuse to rewrite a file Herdr itself cannot read.
+    bindings(existing)?;
+    let (updated, removed) = without_our_bindings(existing);
+    if removed == 0 {
+        println!("No SSH Manager keybinding in {}.", path.display());
+        return Ok(());
+    }
+    if args.dry_run {
+        println!("Would remove {removed} binding(s) from {}.", path.display());
+        return Ok(());
+    }
+    let backup = path.with_extension("toml.bak");
+    std::fs::write(&backup, existing)
+        .with_context(|| format!("could not back up to {}", backup.display()))?;
+    std::fs::write(path, updated.as_bytes())
+        .with_context(|| format!("could not write {}", path.display()))?;
+    println!(
+        "Removed {removed} binding(s) from {} (backup at {}).",
+        path.display(),
+        backup.display()
+    );
+    let _ = crate::herdr::reload_config();
+    Ok(())
+}
+
 pub fn run(args: SetupArgs) -> Result<()> {
     let path = herdr_config_path()?;
     let existing = match std::fs::read_to_string(&path) {
@@ -152,6 +242,10 @@ pub fn run(args: SetupArgs) -> Result<()> {
             return Err(e).with_context(|| format!("could not read {}", path.display()));
         }
     };
+
+    if args.remove {
+        return remove(&args, &path, &existing);
+    }
 
     match plan(&bindings(&existing)?, &args.key) {
         Plan::AlreadyDone { key } => {
@@ -298,6 +392,61 @@ mod tests {
                 command: "other.thing".into()
             }
         );
+    }
+
+    #[test]
+    fn removing_takes_out_our_block_and_nothing_else() {
+        let cfg = format!(
+            "# keep this comment\n[ui]\ntheme = \"dark\"\n\n\
+             [[keys.command]]\nkey = \"prefix+g\"\ncommand = \"other.thing\"\n\n{}",
+            block("prefix+shift+s")
+        );
+        let (out, removed) = without_our_bindings(&cfg);
+        assert_eq!(removed, 1);
+        assert!(out.contains("# keep this comment"), "{out}");
+        assert!(out.contains("other.thing"), "{out}");
+        assert!(!out.contains("herdr-ssh-manager"), "{out}");
+        // Still valid TOML, and the untouched binding survives intact.
+        assert_eq!(bindings(&out).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn add_then_remove_returns_the_file_to_where_it_started() {
+        let original = "[ui]\ntheme = \"dark\"\n";
+        let mut with = original.to_string();
+        with.push('\n');
+        with.push_str(&block("prefix+shift+s"));
+        let (back, removed) = without_our_bindings(&with);
+        assert_eq!(removed, 1);
+        assert_eq!(back, original);
+    }
+
+    #[test]
+    fn comments_describing_the_block_leave_with_it() {
+        // Found the hard way: left behind, these end up above the next table and read as
+        // if they described that instead.
+        let cfg = format!(
+            "onboarding = false\n\n# Opens the picker.\n# prefix+s is taken.\n{}\n[ui]\nx = 1\n",
+            block("prefix+shift+s")
+        );
+        let (out, removed) = without_our_bindings(&cfg);
+        assert_eq!(removed, 1);
+        assert_eq!(out, "onboarding = false\n\n[ui]\nx = 1\n", "{out}");
+    }
+
+    #[test]
+    fn a_comment_separated_by_a_blank_line_belongs_to_someone_else() {
+        let cfg = format!("# unrelated note\n\n{}", block("prefix+shift+s"));
+        let (out, _) = without_our_bindings(&cfg);
+        assert_eq!(out, "# unrelated note\n", "{out}");
+    }
+
+    #[test]
+    fn removing_from_a_config_without_our_binding_is_a_no_op() {
+        let cfg = "[[keys.command]]\nkey = \"prefix+g\"\ncommand = \"other.thing\"\n";
+        let (out, removed) = without_our_bindings(cfg);
+        assert_eq!(removed, 0);
+        assert_eq!(out, cfg);
     }
 
     #[test]

@@ -64,6 +64,21 @@ herdr-ssh-manager setup --key prefix+shift+h
 herdr-ssh-manager setup --dry-run     # show the block without writing
 ```
 
+### Removing it again
+
+Herdr has no uninstall hook — the manifest declares `build`, `startup`, `actions`, `events`,
+`panes` and `link_handlers`, and nothing runs when a plugin is removed. So uninstalling leaves
+your keybinding behind, pointing at an action that no longer exists. Take it out **before**
+uninstalling, while the binary is still there:
+
+```sh
+herdr plugin action invoke unbind --plugin herdr-ssh-manager           # Linux, macOS
+herdr plugin action invoke unbind-windows --plugin herdr-ssh-manager   # Windows
+```
+
+That removes only blocks bound to this plugin, backs the file up first, and leaves everything
+else byte for byte. Afterwards the file is identical to what it was before `setup` ran.
+
 To do it by hand, add this to `~/.config/herdr/config.toml` (`%APPDATA%\herdr\config.toml` on
 Windows) — and see the Windows section below before you copy it, because **the action id is
 different there**:
