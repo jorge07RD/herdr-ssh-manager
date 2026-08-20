@@ -46,8 +46,27 @@ much faster.
 
 ## Keybinding
 
-Herdr plugin manifests cannot declare keybindings, so add one to **your own** Herdr config
-(`~/.config/herdr/config.toml`) to get the picker on a key:
+Herdr plugin manifests cannot declare keybindings, so the picker needs one line in **your own**
+Herdr config. Let the plugin write it:
+
+```sh
+herdr plugin action invoke setup --plugin herdr-ssh-manager           # Linux, macOS
+herdr plugin action invoke setup-windows --plugin herdr-ssh-manager   # Windows
+```
+
+That creates the config if it does not exist yet, picks the action id that works on your
+platform, writes UTF-8 without a BOM, backs up any existing config first, and reloads Herdr so
+the key works immediately. Running it twice changes nothing. If the key is already taken it
+says so instead of stealing it — pick another with `--key`:
+
+```sh
+herdr-ssh-manager setup --key prefix+shift+h
+herdr-ssh-manager setup --dry-run     # show the block without writing
+```
+
+To do it by hand, add this to `~/.config/herdr/config.toml` (`%APPDATA%\herdr\config.toml` on
+Windows) — and see the Windows section below before you copy it, because **the action id is
+different there**:
 
 ```toml
 [[keys.command]]
@@ -60,7 +79,7 @@ description = "SSH connections"
 Pick whatever key you like, but note that Herdr's own defaults already take `prefix` plus
 `s q o w g c p n e h j k l v x z r b tab minus 1..9` and `shift` plus `R N G W D T X P`
 (`prefix+s` in particular opens Herdr's settings). `prefix+shift+s` is free and keeps the
-mnemonic.
+mnemonic. The prefix itself is `ctrl+b`, so the default binding is `Ctrl-B` then `Shift-S`.
 
 There is a second action, `herdr-ssh-manager.open-add`, that opens the add form directly.
 Both also show up wherever Herdr lists plugin actions.
@@ -206,8 +225,9 @@ rather than leaving you with nothing.
 
 ## Windows
 
-On Windows, **bind different action ids**. Herdr rejects duplicate action and pane ids even
-when they are platform-gated, so the Windows entries are suffixed:
+On Windows the action ids are **different**, and this is the single easiest thing to get wrong.
+Herdr rejects duplicate action ids even when they are platform-gated — a duplicate takes the
+whole manifest offline — so the Windows entries are suffixed:
 
 ```toml
 [[keys.command]]
@@ -217,7 +237,9 @@ command = "herdr-ssh-manager.open-picker-windows"   # note the suffix
 description = "SSH connections"
 ```
 
-Your config lives at `%APPDATA%\herdr\config.toml`.
+Your config lives at `%APPDATA%\herdr\config.toml`, and it does not exist until something
+creates it. `herdr plugin action invoke setup-windows --plugin herdr-ssh-manager` handles all
+of that; the block above is only for doing it by hand.
 
 Why the split: Herdr hands a pane or action's *relative* program straight to `CreateProcessW`,
 which resolves it against Herdr's own directory rather than the plugin root, and never appends

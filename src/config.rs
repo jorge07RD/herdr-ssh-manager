@@ -67,7 +67,7 @@ pub fn expand_tilde(path: &str) -> String {
     }
 }
 
-fn non_empty_env(key: &str) -> Option<String> {
+pub fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 

@@ -26,7 +26,7 @@
 
 id = "herdr-ssh-manager"
 name = "SSH Manager"
-version = "0.7.0-rc1"
+version = "0.7.0-rc2"
 min_herdr_version = "0.8.0"
 description = "Save and reconnect to SSH hosts from Herdr"
 platforms = ["linux", "macos", "windows"]
@@ -127,4 +127,24 @@ contexts = ["workspace", "global"]
 command = [
   "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
   '''$ErrorActionPreference='Stop'; $u=New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; $OutputEncoding=$u; $b=$env:HERDR_BIN_PATH; if(-not $b){$b='herdr'}; & $b plugin pane open --plugin herdr-ssh-manager --entrypoint add-windows --placement popup''',
+]
+
+# Binding a key by hand means getting the platform's action id, the config file's location,
+# its very existence, and (on Windows) its encoding all right — and every one of those fails
+# the same silent way: you press the key and nothing happens. `setup` does it instead.
+[[actions]]
+id = "setup"
+platforms = ["linux", "macos"]
+title = "SSH: bind the picker to a key"
+contexts = ["workspace", "global"]
+command = ["./target/release/herdr-ssh-manager", "setup"]
+
+[[actions]]
+id = "setup-windows"
+platforms = ["windows"]
+title = "SSH: bind the picker to a key"
+contexts = ["workspace", "global"]
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$ErrorActionPreference='Stop'; $u=New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; $OutputEncoding=$u; $p=$env:HERDR_PLUGIN_ROOT; if(-not $p){$b=$env:HERDR_BIN_PATH; if(-not $b){$b='herdr'}; $p=((& $b plugin list --json|ConvertFrom-Json).result.plugins|Where-Object{$_.plugin_id -eq 'herdr-ssh-manager'}).plugin_root}; if($p.StartsWith('\?')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') setup''',
 ]

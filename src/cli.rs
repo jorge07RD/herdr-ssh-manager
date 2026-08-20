@@ -38,6 +38,8 @@ pub enum Command {
     Connect(ConnectArgs),
     /// Print where connections.toml lives
     Where,
+    /// Bind the picker to a key in your own Herdr config
+    Setup(crate::setup::SetupArgs),
     /// Ask Herdr to open the picker popup (bound to the open-picker action)
     #[command(hide = true)]
     OpenPicker,
